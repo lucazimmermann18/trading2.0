@@ -63,26 +63,26 @@ function KVRow({ k, v }: { k: string; v: string | number }) {
 
 export default function SystemView() {
   const [tick, setTick] = useState(0)
+  const [startTime] = useState(() => Date.now() - 14 * 3600000 - 1800000)
+  const [audit] = useState<AuditEvent[]>(() => buildAuditLog())
+
   useEffect(() => {
     const i = setInterval(() => setTick(t => t + 1), 3000)
     return () => clearInterval(i)
   }, [])
-
-  const startTime = useMemo(() => Date.now() - 14 * 3600000 - Math.random() * 3600000, [])
-  const audit = useMemo(buildAuditLog, [])
 
   const uptime = 99.7
   const upHours = Math.floor((Date.now() - startTime) / 3600000)
   const scansToday = 288 + Math.floor(tick * 0.3)
   const latency = 280 + Math.floor(Math.sin(tick * 0.7) * 80)
 
-  const feeds: FeedStatus[] = [
+  const feeds: FeedStatus[] = useMemo(() => [
     { name: "Twelve Data",  status: "ok",    latency: 38 + Math.floor(Math.sin(tick) * 12), msgsPerMin: 840 },
     { name: "Price Ticker", status: "ok",    latency: 12 + Math.floor(Math.cos(tick) * 5),  msgsPerMin: 1680 },
     { name: "OANDA REST",   status: "stale", latency: 0,   msgsPerMin: 0,   note: "API key not configured" },
     { name: "MetaApi",      status: "error", latency: 0,   msgsPerMin: 0,   note: "Connection refused" },
-    { name: "CoinGecko",    status: "ok",    latency: 91 + Math.floor(Math.random() * 40),  msgsPerMin: 60 },
-  ]
+    { name: "CoinGecko",    status: "ok",    latency: 94,  msgsPerMin: 60 },
+  ], [tick])
 
   const notifChannels = [
     { name: "Telegram",  status: "off",  delivered: 0,  failed: 0 },

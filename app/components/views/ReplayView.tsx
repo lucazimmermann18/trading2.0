@@ -33,16 +33,20 @@ function KVMini({ label, value, color = "#ffffff" }: { label: string; value: str
 
 type OHLCBar = { open: number; high: number; low: number; close: number; time?: number }
 
-function buildSyntheticBars(signal: HistoryEntry): OHLCBar[] {
+function buildSyntheticBars(signal: HistoryEntry, seed: number): OHLCBar[] {
+  // Seeded PRNG so the bars are deterministic for a given signal
+  let s = seed
+  const rng = () => { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0xffffffff }
+
   const out: OHLCBar[] = []
-  const vol = Math.abs(signal.entry - signal.sl) * 0.4
+  const vol = Math.abs(signal.entry - signal.sl) * 0.4 || signal.entry * 0.001
   let prev = signal.entry - vol * 3
   for (let i = 0; i < 80; i++) {
-    const drift = (Math.random() - 0.5) * vol
+    const drift = (rng() - 0.5) * vol
     const open = i === 0 ? prev : out[i - 1].close
     const close = open + drift + (i > 40 ? (signal.side === "BUY" ? vol * 0.08 : -vol * 0.08) : 0)
-    const high = Math.max(open, close) + Math.random() * vol * 0.4
-    const low  = Math.min(open, close) - Math.random() * vol * 0.4
+    const high = Math.max(open, close) + rng() * vol * 0.4
+    const low  = Math.min(open, close) - rng() * vol * 0.4
     out.push({ open, high, low, close })
     prev = close
   }
@@ -65,7 +69,7 @@ function ReplayChart({ signal, pair }: { signal: HistoryEntry; pair: Pair | unde
       const sliced = bars.slice(closestIdx - before, closestIdx + after + 1)
       return { data: sliced as OHLCBar[], isReal: true, entryBarIdx: before }
     }
-    return { data: buildSyntheticBars(signal), isReal: false, entryBarIdx: -1 }
+    return { data: buildSyntheticBars(signal, signal.time), isReal: false, entryBarIdx: -1 }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pair?.sym, pair?.history.length, signal.time])
 
