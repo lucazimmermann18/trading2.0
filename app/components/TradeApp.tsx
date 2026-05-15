@@ -7,6 +7,7 @@ import ChartPanel from "./chart/ChartPanel"
 import AIPanel from "./panels/AIPanel"
 import Toast from "./panels/Toast"
 import MultiChartView from "./views/MultiChartView"
+import HeatmapView from "./views/HeatmapView"
 import type { Pair, HistoryEntry, KnowledgeModule, ViewId, Timeframe } from "@/app/lib/types"
 import {
   buildInitialState, tickPair, makeSignal, KNOWLEDGE,
@@ -137,7 +138,6 @@ export default function TradeApp() {
     </div>
   )
 
-  // Views that replace the chart+ai panel layout
   const isFullView = view === "multichart" || view === "heatmap" || view === "performance" || view === "journal" || view === "replay" || view === "system"
 
   return (
@@ -190,8 +190,12 @@ export default function TradeApp() {
           <MultiChartView pairs={pairs} onOpen={handleOpenPair} />
         )}
 
+        {view === "heatmap" && (
+          <HeatmapView pairs={pairs} />
+        )}
+
         {/* Placeholder views for future implementation */}
-        {(view === "heatmap" || view === "performance" || view === "journal" || view === "replay" || view === "system") && (
+        {(view === "performance" || view === "journal" || view === "replay" || view === "system") && (
           <ComingSoon view={view} />
         )}
       </div>

@@ -157,3 +157,32 @@ export function timeAgo(t: number): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`
   return `${Math.floor(s / 3600)}h ago`
 }
+
+export interface CorrelationRow { sym: string; row: number[] }
+
+export function buildCorrelationMatrix(pairs: Pair[]): CorrelationRow[] {
+  const active = pairs.filter(p => p.active).slice(0, 8)
+  return active.map((a, i) => {
+    const row = active.map((b, j) => {
+      if (i === j) return 1
+      // Use last 30 close prices to compute Pearson correlation
+      const aClose = a.history.slice(-30).map(h => h.close)
+      const bClose = b.history.slice(-30).map(h => h.close)
+      const len = Math.min(aClose.length, bClose.length)
+      if (len < 3) return 0
+      const ax = aClose.slice(-len), bx = bClose.slice(-len)
+      const am = ax.reduce((s, v) => s + v, 0) / len
+      const bm = bx.reduce((s, v) => s + v, 0) / len
+      let num = 0, da = 0, db = 0
+      for (let k = 0; k < len; k++) {
+        const ad = ax[k] - am, bd = bx[k] - bm
+        num += ad * bd
+        da += ad * ad
+        db += bd * bd
+      }
+      const denom = Math.sqrt(da * db)
+      return denom === 0 ? 0 : Math.max(-1, Math.min(1, num / denom))
+    })
+    return { sym: a.sym, row }
+  })
+}
