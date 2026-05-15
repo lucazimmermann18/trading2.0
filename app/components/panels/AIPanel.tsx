@@ -1,14 +1,13 @@
 "use client"
-import type { Pair, KnowledgeModule, HistoryEntry } from "@/app/lib/types"
+import { useState, useMemo } from "react"
+import type { Pair, HistoryEntry } from "@/app/lib/types"
 import { fmt, timeAgo, SKILLSETS } from "@/app/lib/market-data"
-import { useState } from "react"
+import { buildSMCContext } from "@/app/lib/smc"
 
 interface Props {
   pair: Pair
   skillset: string
   setSkillset: (s: string) => void
-  knowledge: KnowledgeModule[]
-  toggleKnowledge: (k: string) => void
   history: HistoryEntry[]
   threshold: number
   setThreshold: (n: number) => void
@@ -75,18 +74,28 @@ function SkillsetSelect({ value, onChange }: { value: string; onChange: (s: stri
   )
 }
 
-export default function AIPanel({ pair, skillset, setSkillset, knowledge, toggleKnowledge, history, threshold, setThreshold, scanning, onScanPair, aiConfigured }: Props) {
+export default function AIPanel({ pair, skillset, setSkillset, history, threshold, setThreshold, scanning, onScanPair, aiConfigured }: Props) {
   const [manualScanning, setManualScanning] = useState(false)
   const trade = pair.status === "TRADE"
   const conf = pair.signal?.confidence ?? pair.confidence ?? 0
   const confCol = conf >= 70 ? "#00ff88" : conf >= 40 ? "#ffb800" : "#ff3d5a"
   const isScanning = scanning || manualScanning
 
+  const smc = useMemo(
+    () => pair.history.length >= 20 ? buildSMCContext(pair.history, pair.px) : null,
+    [pair.history, pair.px]
+  )
+
   const handleManualScan = async () => {
     if (isScanning) return
     setManualScanning(true)
     try { await onScanPair() } finally { setManualScanning(false) }
   }
+
+  const biasCol = smc?.structure.bias === "BULLISH" ? "#00ff88"
+    : smc?.structure.bias === "BEARISH" ? "#ff3d5a" : "#ffffff40"
+  const zoneCol = smc?.structure.zone === "DISCOUNT" ? "#00ff88"
+    : smc?.structure.zone === "PREMIUM" ? "#ff3d5a" : "#ffffff50"
 
   return (
     <aside className="w-[320px] shrink-0 panel border-t-0 border-b-0 border-r-0 flex flex-col">
@@ -98,7 +107,7 @@ export default function AIPanel({ pair, skillset, setSkillset, knowledge, toggle
             <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.5" className="animate-pulseDot">
               <path d="M12 3v3M12 18v3M5 12H2M22 12h-3M5.6 5.6 7.7 7.7M16.3 16.3l2.1 2.1M5.6 18.4 7.7 16.3M16.3 7.7l2.1-2.1"/>
             </svg>
-            <span className="tracking-[0.14em]">CLAUDE</span>
+            <span className="tracking-[0.14em]">LIVE SMC</span>
           </div>
         </div>
         <div className="mt-2 flex items-center gap-2">
@@ -110,7 +119,7 @@ export default function AIPanel({ pair, skillset, setSkillset, knowledge, toggle
         </div>
       </div>
 
-      {/* Manual scan button */}
+      {/* Scan button */}
       <div className="px-4 py-3 border-b hairline shrink-0">
         {aiConfigured ? (
           <button
@@ -155,29 +164,96 @@ export default function AIPanel({ pair, skillset, setSkillset, knowledge, toggle
 
       <div className="overflow-y-auto flex-1">
         {/* Skillset */}
-        <Section label="Active Skillset">
+        <Section label="Analysis Mode">
           <SkillsetSelect value={skillset} onChange={setSkillset} />
         </Section>
 
-        {/* Knowledge modules */}
-        <Section label="Knowledge Modules" sub={`${knowledge.filter(k => k.on).length}/${knowledge.length} active`}>
-          <div className="flex flex-wrap gap-1.5">
-            {knowledge.map(k => (
-              <button
-                key={k.key}
-                onClick={() => toggleKnowledge(k.key)}
-                className={`text-[10.5px] px-2 h-7 rounded-full flex items-center gap-1.5 transition tracking-[0.02em]
-                  ${k.on ? "chip-on" : "chip text-mute hover:text-white"}`}
-              >
-                <span className={`w-3 h-3 rounded-[3px] flex items-center justify-center ${k.on ? "bg-accent-blue/30 text-accent-blue" : "bg-white/5 text-transparent"}`}>
-                  <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <path d="m5 12 5 5L20 7"/>
-                  </svg>
+        {/* Live SMC Market Structure */}
+        <Section label="Market Structure" sub={smc ? "Live" : "Loading…"}>
+          {!smc ? (
+            <div className="text-[11px] text-mute italic">Waiting for market data…</div>
+          ) : (
+            <div className="space-y-2">
+              {/* Bias + Zone row */}
+              <div className="flex items-center gap-2">
+                <span className="px-2 h-[22px] rounded text-[10px] font-bold tracking-[0.12em] flex items-center"
+                  style={{ background: `${biasCol}18`, color: biasCol }}>
+                  {smc.structure.bias}
                 </span>
-                {k.label}
-              </button>
-            ))}
-          </div>
+                <span className="px-2 h-[22px] rounded text-[10px] font-semibold tracking-[0.1em] flex items-center"
+                  style={{ background: `${zoneCol}12`, color: zoneCol }}>
+                  {smc.structure.zone}
+                </span>
+                {smc.structure.inOTE && (
+                  <span className="px-2 h-[22px] rounded bg-accent-violet/15 text-accent-violet text-[10px] font-bold tracking-[0.1em] flex items-center">
+                    OTE ★
+                  </span>
+                )}
+              </div>
+
+              {/* BOS / CHoCH */}
+              {smc.structure.lastBOS && (
+                <div className="flex items-center justify-between px-2 py-1 rounded-md bg-white/[0.02]">
+                  <span className="text-[10px] font-bold tracking-[0.1em]"
+                    style={{ color: smc.structure.lastBOS.direction === "UP" ? "#00ff88" : "#ff3d5a" }}>
+                    {smc.structure.lastBOS.kind} {smc.structure.lastBOS.direction === "UP" ? "↑" : "↓"}
+                  </span>
+                  <span className="num text-[10px] text-white">{smc.structure.lastBOS.price.toFixed(pair.digits)}</span>
+                </div>
+              )}
+
+              {/* Order Blocks */}
+              {smc.orderBlocks.length > 0 && (
+                <div className="space-y-1">
+                  <div className="text-[9px] tracking-[0.16em] uppercase text-mute/70 px-1 pt-1">Order Blocks</div>
+                  {smc.orderBlocks.slice(0, 3).map((ob, i) => (
+                    <div key={i} className="flex items-center gap-2 px-2 py-1 rounded-md bg-white/[0.02]">
+                      <span className={`text-[10px] font-bold w-[28px] shrink-0 ${ob.type === "bull" ? "text-accent-green" : "text-accent-red"}`}>
+                        {ob.type === "bull" ? "↑ B" : "↓ B"}
+                      </span>
+                      <span className="num text-[10px] text-white flex-1 truncate">
+                        {ob.low.toFixed(pair.digits)} – {ob.high.toFixed(pair.digits)}
+                      </span>
+                      <span className="text-[9px] text-accent-blue/70 shrink-0">{"●".repeat(ob.strength)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Fair Value Gaps */}
+              {smc.fvgs.length > 0 && (
+                <div className="space-y-1">
+                  <div className="text-[9px] tracking-[0.16em] uppercase text-mute/70 px-1 pt-1">Fair Value Gaps</div>
+                  {smc.fvgs.slice(0, 3).map((fvg, i) => (
+                    <div key={i} className="flex items-center gap-2 px-2 py-1 rounded-md bg-white/[0.02]">
+                      <span className={`text-[10px] font-bold w-[28px] shrink-0 ${fvg.type === "bull" ? "text-accent-blue" : "text-accent-violet"}`}>
+                        {fvg.type === "bull" ? "↑ G" : "↓ G"}
+                      </span>
+                      <span className="num text-[10px] text-white flex-1 truncate">
+                        {fvg.bottom.toFixed(pair.digits)} – {fvg.top.toFixed(pair.digits)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Liquidity Levels */}
+              {smc.liquidity.length > 0 && (
+                <div className="space-y-1">
+                  <div className="text-[9px] tracking-[0.16em] uppercase text-mute/70 px-1 pt-1">Liquidity</div>
+                  {smc.liquidity.slice(0, 3).map((liq, i) => (
+                    <div key={i} className="flex items-center gap-2 px-2 py-1 rounded-md bg-white/[0.02]">
+                      <span className={`text-[9.5px] font-bold w-[28px] shrink-0 ${liq.type === "buyside" ? "text-accent-green/70" : "text-accent-red/70"}`}>
+                        {liq.type === "buyside" ? "BSL" : "SSL"}
+                      </span>
+                      <span className="num text-[10px] text-white flex-1">{liq.price.toFixed(pair.digits)}</span>
+                      <span className="text-[9px] text-mute shrink-0">{liq.touches}×</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </Section>
 
         {/* Last AI scan */}
@@ -185,7 +261,7 @@ export default function AIPanel({ pair, skillset, setSkillset, knowledge, toggle
           <div className="rounded-lg p-3 bg-white/[0.025] border border-white/[0.06]">
             <div className="flex items-center justify-between mb-2">
               <div className="text-[10px] tracking-[0.14em] text-mute">{pair.sym} · {pair.signal?.tf ?? "H1"}</div>
-              <div className="text-[10px] num text-mute">{new Date(pair.lastScan).toLocaleTimeString()}</div>
+              {pair.lastScan > 0 && <div className="text-[10px] num text-mute">{new Date(pair.lastScan).toLocaleTimeString()}</div>}
             </div>
             <div className="text-[12px] leading-relaxed text-white/85">
               {trade ? pair.signal?.why : pair.reasoning}
@@ -233,7 +309,7 @@ export default function AIPanel({ pair, skillset, setSkillset, knowledge, toggle
         <Section label="Signal Log" sub={`${history.length} signals`}>
           <div className="space-y-1.5">
             {history.length === 0 && (
-              <div className="text-[11px] text-mute italic px-1">No signals yet. AI is monitoring.</div>
+              <div className="text-[11px] text-mute italic px-1">No signals yet — AI scanner monitoring…</div>
             )}
             {history.slice(0, 8).map((s, i) => (
               <div key={i} className="px-2.5 py-2 rounded-md bg-white/[0.02] border border-white/[0.05] flex items-center gap-3">

@@ -61,11 +61,6 @@ export interface HistoryEntry {
   notes?: string
 }
 
-export interface KnowledgeModule {
-  key: string
-  label: string
-  on: boolean
-}
 
 export interface Session {
   key: string

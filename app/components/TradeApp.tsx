@@ -14,9 +14,9 @@ import PerformanceView from "./views/PerformanceView"
 import JournalView from "./views/JournalView"
 import ReplayView from "./views/ReplayView"
 import SystemView from "./views/SystemView"
-import type { Pair, HistoryEntry, KnowledgeModule, ViewId, Timeframe, AuditEntry, AuditKind, SystemMetrics } from "@/app/lib/types"
+import type { Pair, HistoryEntry, ViewId, Timeframe, AuditEntry, AuditKind, SystemMetrics } from "@/app/lib/types"
 import {
-  buildInitialState, KNOWLEDGE,
+  buildInitialState,
   activeSessions, buildMarketContext, calcRSI, calcMACD,
 } from "@/app/lib/market-data"
 import { fetchBars } from "@/app/lib/twelvedata"
@@ -34,7 +34,6 @@ export default function TradeApp() {
   const [selectedId, setSelectedId] = useState(7) // XAU/USD
   const [timeframe, setTimeframe] = useState<Timeframe>("H1")
   const [skillset, setSkillset] = useState("Smart Money Concepts")
-  const [knowledge, setKnowledge] = useState<KnowledgeModule[]>(KNOWLEDGE)
   const [threshold, setThreshold] = useState(75)
   const [scannerOn, setScannerOn] = useState(true)
   const persistedAppliedRef = useRef(false)
@@ -120,12 +119,6 @@ export default function TradeApp() {
     if (s.activePairIds.length > 0) {
       const ids = new Set(s.activePairIds)
       setPairs(prev => prev.map(p => ({ ...p, active: ids.has(p.id) })))
-    }
-    if (Object.keys(s.knowledge).length > 0) {
-      setKnowledge(prev => prev.map(k => ({
-        ...k,
-        on: k.key in s.knowledge ? s.knowledge[k.key] : k.on,
-      })))
     }
   }, [persLoaded, pairs.length, persState])
 
@@ -353,13 +346,6 @@ export default function TradeApp() {
     }
   }, [wsConnected, logEvent])
 
-  const toggleKnowledge = (k: string) =>
-    setKnowledge(prev => {
-      const next = prev.map(x => x.key === k ? { ...x, on: !x.on } : x)
-      persSave({ knowledge: Object.fromEntries(next.map(x => [x.key, x.on])) })
-      return next
-    })
-
   const onToggleActive = (id: number) => {
     setPairs(prev => {
       const next = prev.map(p => p.id === id ? { ...p, active: !p.active } : p)
@@ -441,8 +427,6 @@ export default function TradeApp() {
               pair={selected}
               skillset={skillset}
               setSkillset={handleSetSkillset}
-              knowledge={knowledge}
-              toggleKnowledge={toggleKnowledge}
               history={history}
               threshold={threshold}
               setThreshold={handleSetThreshold}

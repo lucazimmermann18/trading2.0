@@ -1,4 +1,5 @@
-import type { Pair, OHLCBar, Signal, KnowledgeModule, Session, HistoryEntry } from "./types"
+import type { Pair, OHLCBar, Signal, Session, HistoryEntry } from "./types"
+import { buildSMCContext, type SMCContext } from "./smc"
 
 export const PAIRS_SEED: Omit<Pair, "id" | "active" | "status" | "signal" | "lastScan" | "history" | "reasoning" | "confidence" | "rsi" | "macd">[] = [
   { sym: "EUR/USD", name: "Euro / US Dollar",       group: "FX Major", px: 1.0891, digits: 5, spread: 0.6, vol: 0.00035 },
@@ -26,18 +27,6 @@ export const SKILLSETS = [
   "Multi-Strategy",
 ]
 
-export const KNOWLEDGE: KnowledgeModule[] = [
-  { key: "snr",  label: "Support & Resistance", on: true  },
-  { key: "ms",   label: "Market Structure",      on: true  },
-  { key: "liq",  label: "Liquidity Zones",       on: true  },
-  { key: "sess", label: "Session Analysis",      on: true  },
-  { key: "news", label: "News Filter",           on: true  },
-  { key: "corr", label: "Correlation Matrix",    on: true  },
-  { key: "ew",   label: "Elliott Wave",          on: false },
-  { key: "of",   label: "Order Flow",            on: false },
-  { key: "fib",  label: "Fibonacci Confluence",  on: false },
-  { key: "vol",  label: "Volume Profile",        on: false },
-]
 
 export function fmt(px: number, digits: number): string {
   return px.toFixed(digits)
@@ -136,6 +125,7 @@ export interface MarketContext {
   atr: number
   candlePatterns: CandlePattern[]
   htf: HigherTFContext
+  smc: SMCContext
 }
 
 // ── ATR (Wilder's) ─────────────────────────────────────────────
@@ -281,7 +271,8 @@ export function buildMarketContext(p: Pair): MarketContext {
   const atr    = calcATR(p.history)
   const candlePatterns = detectCandlePatterns(p.history.slice(-5))
   const htf    = buildHigherTFContext(p.history)
-  return { rsi, macdLine, signalLine, histogram, bb, trend, swings, activeSessions: sessions, atr, candlePatterns, htf }
+  const smc    = buildSMCContext(p.history, p.px)
+  return { rsi, macdLine, signalLine, histogram, bb, trend, swings, activeSessions: sessions, atr, candlePatterns, htf, smc }
 }
 
 export function buildInitialState(): Pair[] {

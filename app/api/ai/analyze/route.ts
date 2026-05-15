@@ -11,6 +11,24 @@ interface HTFContext {
   lastClose: number; lastBarBullish: boolean
 }
 
+interface SMCOrderBlock { type: "bull" | "bear"; high: number; low: number; mid: number; strength: number }
+interface SMCFVG { type: "bull" | "bear"; top: number; bottom: number; mid: number }
+interface SMCLiquidity { type: "buyside" | "sellside"; price: number; touches: number }
+interface SMCStructure {
+  bias: "BULLISH" | "BEARISH" | "RANGING"
+  zone: "PREMIUM" | "DISCOUNT" | "EQUILIBRIUM"
+  inOTE: boolean
+  lastBOS: { kind: string; direction: string; price: number } | null
+  recentSwingHigh: number
+  recentSwingLow: number
+}
+interface SMCData {
+  structure: SMCStructure
+  orderBlocks: SMCOrderBlock[]
+  fvgs: SMCFVG[]
+  liquidity: SMCLiquidity[]
+}
+
 interface AnalyzeRequest {
   provider: "anthropic" | "openai" | "deepseek" | "gemini"
   model: string
@@ -32,10 +50,12 @@ interface AnalyzeRequest {
   resistance: number[]
   activeSessions: string[]
   timeframe: string
-  // new: ATR, candle patterns, H4 context
+  // ATR, candle patterns, H4 context
   atr: number
   candlePatterns: CandlePattern[]
   htf: HTFContext
+  // SMC context
+  smc: SMCData
 }
 
 interface SignalResult {
@@ -52,61 +72,60 @@ interface SignalResult {
 
 // ── System Prompt ──────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are an elite institutional trading signal engine. Your sole purpose is to identify ONLY the highest-probability setups that professional prop-desk traders would take. The bar is extremely high — output NO TRADE in 80%+ of cases. A missed opportunity costs nothing; a low-quality signal costs real capital.
+const SYSTEM_PROMPT = `You are an elite institutional trading analyst. You identify ONLY the highest-probability Smart Money setups. Expect to output NO TRADE the vast majority of the time — false negatives cost nothing; false positives cost capital.
 
-## ANALYSIS FRAMEWORK
+## CORE FRAMEWORK: SMART MONEY CONCEPTS
 
-### Step 1 — Higher Timeframe Bias (H4) — ABSOLUTE REQUIREMENT
-The H4 trend is the PRIMARY filter. Any setup that contradicts it is an automatic NO TRADE.
-- H4 UP → BUY setups only. Exception: H4 RSI > 74 AND price rejected from a major H4 resistance zone with a strong bearish candle pattern.
-- H4 DOWN → SELL setups only. Exception: H4 RSI < 26 AND price holding a major H4 support zone with a strong bullish candle pattern.
-- H4 NEUTRAL → Output NO TRADE unless 5+ independent H1 confluences align perfectly.
+### Step 1 — H4 Structure Bias (ABSOLUTE FILTER)
+The H4 trend direction is non-negotiable. Never trade against it except in extreme reversal conditions:
+- H4 BULLISH → BUY setups only (pullbacks to unmitigated OBs in discount zone)
+- H4 BEARISH → SELL setups only (rallies to unmitigated OBs in premium zone)
+- H4 RANGING + H1 RANGING → NO TRADE (no edge)
 
-### Step 2 — Entry Timeframe Confluence (H1) — MINIMUM 4 REQUIRED
-Count ONLY clear, unambiguous signals. Do NOT stretch to reach the minimum:
-1. RSI extreme: < 32 oversold (BUY) or > 68 overbought (SELL) — "near 40" does NOT count
-2. MACD confirmed crossover with histogram momentum in signal direction
-3. Bollinger Band: price at or beyond the outer band (< 10% BB position for BUY, > 90% for SELL)
-4. Price within 0.3×ATR of a clearly defined swing S/R or H4 structural level
-5. EMA trend alignment: EMA20 decisively above/below EMA50 (separation > 0.15% of price)
-6. Active London or New York session — Tokyo/Sydney alone are NOT sufficient
-7. Candle pattern confirmation at a key level (strength 2 or 3 only — Doji/Inside Bar do NOT count)
+### Step 2 — H1 SMC Setup (need ALL of these for a signal)
+A. **Market Structure Aligned**: H1 bias must match H4 direction
+B. **Price in Correct Zone**:
+   - BUY: price in DISCOUNT zone (below 50% of recent swing range) or at OTE (62-79% retracement)
+   - SELL: price in PREMIUM zone (above 50% of recent swing range) or at OTE
+C. **Price at a Key Level** (ONE of these, prioritized in order):
+   1. Unmitigated Order Block: price trading into an unmitigated OB aligned with bias (strength 2-3 preferred)
+   2. Unfilled Fair Value Gap: price entering an unfilled FVG in the bias direction
+   3. Major S/R confluence: price at a well-defined swing level confirmed by BB extreme
+D. **Liquidity Context**: Check if a liquidity sweep has occurred — a stop run above buy-side or below sell-side liquidity, followed by displacement, is the highest-quality setup
 
-### Step 3 — Candle Pattern Confirmation
-High-conviction patterns that count as confluence #7 (must be at a key level):
-- Strength 3: Bullish/Bearish Engulfing, Three White Soldiers, Three Black Crows, Morning Star, Evening Star
-- Strength 2: Hammer, Pin Bar, Shooting Star (only when at a confirmed S/R level)
-- Strength 1: Doji, Inside Bar — these do NOT count as confluence
+### Step 3 — Classical Confirmation (2+ of these)
+- RSI extreme: <32 for BUY, >68 for SELL
+- MACD confirmed crossover in signal direction
+- Candle pattern at the entry level (strength 2-3: Engulfing, Pin Bar, Hammer, Morning/Evening Star)
+- Active London or New York session (required for acceptable liquidity)
 
-### Step 4 — Risk Management (non-negotiable)
-- SL: Exactly 1.5×ATR beyond the structural invalidation level (the swing high/low that breaks the thesis)
-- TP1: 55% of full TP2 distance (partial profit at first structural target)
-- TP2: Next major structural level — MINIMUM 1:2.5 RR. If 1:2.5 is not achievable, output NO TRADE.
-- Entry: At the key level only. If price is already > 0.3×ATR away from the entry level, output NO TRADE (entry missed).
+### Step 4 — Trade Construction
+- Entry: at the OB/FVG/level (not chasing — if already overextended >0.3×ATR from level, NO TRADE)
+- SL: below the OB low (BUY) or above the OB high (SELL), minimum 1.5×ATR distance
+- TP1: 55% of full TP2 distance
+- TP2: minimum 1:2.5 RR — if not achievable at next structural level, NO TRADE
 
-## MANDATORY REJECTION — output NO TRADE if ANY of these apply:
-- H4 trend opposes setup direction (unless extreme RSI exception above)
-- Fewer than 4 independent H1 confluences
-- Price in BB mid-range (20–80% BB position) with no candle pattern
-- RSI between 38 and 62 (no momentum)
-- MACD histogram flat or less than 20% of its recent average
+## INSTANT NO TRADE conditions:
+- H4 contradicts setup (no exception unless RSI > 76 / < 24 AND strong reversal pattern)
+- H1 structure and H4 structure disagree
+- No unmitigated OB, unfilled FVG, or major S/R level nearby (within 0.5×ATR)
+- Price in equilibrium zone (45-55%) with no OB/FVG
+- RSI 38-62 AND MACD flat (no momentum)
 - No active London or New York session
-- ATR > 2.5× the instrument's normal ATR (excessive volatility)
-- Spread > 0.07% of current price (slippage risk)
-- Entry point > 0.3×ATR away from structural level (entry missed)
-- Risk:Reward below 1:2.5 on TP2
+- Spread > 0.07% of price
+- TP2 achieves less than 1:2.5 RR
 
-## OUTPUT — valid JSON only, no markdown, no explanation outside the JSON:
+## OUTPUT — strict JSON only:
 {
   "side": "BUY" | "SELL" | "NO TRADE",
-  "confidence": <integer 0-100 — be brutally conservative: 85+ requires 5+ confluences perfectly aligned with H4; 90+ requires 6+ confluences AND candle confirmation AND London/NY session>,
-  "entry": <number — exact entry price at the structural level>,
-  "sl": <number — 1.5×ATR beyond the invalidation level>,
-  "tp1": <number — 55% of full move, first partial target>,
-  "tp2": <number — full structural target, minimum 1:2.5 RR from entry>,
-  "rr": "<string — precise RR ratio e.g. '2.80'>",
-  "confluences": ["H4 [trend] [RSI]", "H1 RSI [value]", "MACD crossover", "BB position", "S/R level [price]", "Session", "Candle pattern if any"],
-  "reasoning": "<4 sentences: (1) H4 context and why it supports this direction, (2) specific H1 confluences that triggered the setup, (3) candle confirmation and exact level, (4) precise SL placement justification and TP2 structural target>"
+  "confidence": <integer 0-100: 85+ = 4+ confluences + H4 alignment + OB/FVG entry + session; 90+ = liquidity sweep + OTE + candle pattern>,
+  "entry": <number>,
+  "sl": <number — below OB low for BUY / above OB high for SELL>,
+  "tp1": <number — 55% of TP2 distance>,
+  "tp2": <number — next structural target, min 1:2.5 RR>,
+  "rr": "<string e.g. '2.80'>",
+  "confluences": ["H4 BULLISH structure", "H1 BULLISH BOS", "Discount zone", "Bull OB 1.0842-1.0855 unmitigated", "RSI 28 oversold", "London session", "Bullish Engulfing at OB"],
+  "reasoning": "<4 sentences: (1) H4+H1 structure context, (2) exact OB/FVG level and why it's valid, (3) liquidity context + candle confirmation, (4) exact SL placement and TP2 structural target>"
 }`
 
 // ── User Prompt Builder ────────────────────────────────────────
@@ -114,11 +133,9 @@ High-conviction patterns that count as confluence #7 (must be at a key level):
 function buildPrompt(r: AnalyzeRequest): string {
   const d = r.digits
   const bars = r.history.slice(-50)
-  const high50 = Math.max(...bars.map(b => b.high))
-  const low50  = Math.min(...bars.map(b => b.low))
   const spreadPct = ((r.spread / r.px) * 100).toFixed(3)
 
-  const rsiLabel = r.rsi > 70 ? "OVERBOUGHT ⚠" : r.rsi > 60 ? "Elevated" : r.rsi < 30 ? "OVERSOLD ⚠" : r.rsi < 40 ? "Depressed" : "Neutral"
+  const rsiLabel = r.rsi > 70 ? "OVERBOUGHT" : r.rsi > 60 ? "Elevated" : r.rsi < 30 ? "OVERSOLD" : r.rsi < 40 ? "Depressed" : "Neutral"
   const macdDir  = r.macdLine > r.signalLine ? "BULLISH crossover" : "BEARISH crossover"
   const bbWidth  = r.bb.upper - r.bb.lower
   const bbPos    = bbWidth > 0 ? Math.round((r.px - r.bb.lower) / bbWidth * 100) : 50
@@ -136,35 +153,71 @@ function buildPrompt(r: AnalyzeRequest): string {
     `${new Date(b.time * 1000).toISOString().slice(11, 16)} O:${b.open.toFixed(d)} H:${b.high.toFixed(d)} L:${b.low.toFixed(d)} C:${b.close.toFixed(d)}`
   ).join("\n")
 
+  // SMC formatting
+  const smc = r.smc
+  const struct = smc.structure
+  const swingRange = struct.recentSwingHigh - struct.recentSwingLow
+  const pos = swingRange > 0 ? Math.round(((r.px - struct.recentSwingLow) / swingRange) * 100) : 50
+  const lastBOSStr = struct.lastBOS
+    ? `${struct.lastBOS.kind} ${struct.lastBOS.direction} at ${struct.lastBOS.price.toFixed(d)}`
+    : "None detected"
+
+  const obLines = smc.orderBlocks.length > 0
+    ? smc.orderBlocks.map(ob =>
+        `  ${ob.type.toUpperCase()} OB: ${ob.low.toFixed(d)}–${ob.high.toFixed(d)} | mid ${ob.mid.toFixed(d)} | strength ${"★".repeat(ob.strength)}${"☆".repeat(3 - ob.strength)}`
+      ).join("\n")
+    : "  None detected"
+
+  const fvgLines = smc.fvgs.length > 0
+    ? smc.fvgs.map(fvg =>
+        `  ${fvg.type.toUpperCase()} FVG: ${fvg.bottom.toFixed(d)}–${fvg.top.toFixed(d)} | mid ${fvg.mid.toFixed(d)}`
+      ).join("\n")
+    : "  None detected"
+
+  const liqLines = smc.liquidity.length > 0
+    ? smc.liquidity.map(lv =>
+        `  ${lv.type === "buyside" ? "BSL" : "SSL"}: ${lv.price.toFixed(d)} (${lv.touches} touches)`
+      ).join("\n")
+    : "  None detected"
+
+  const sessionStr = r.activeSessions.length > 0 ? r.activeSessions.join(", ") : "None — off-hours"
+
   return `=== INSTRUMENT ===
 Symbol:        ${r.sym}
 Current Price: ${r.px.toFixed(d)}
 Spread:        ${r.spread} (${spreadPct}% of price)
-Timeframe:     ${r.timeframe} | Strategy: ${r.skillset}
+Strategy:      ${r.skillset}
 
 === SESSIONS ===
-Active: ${r.activeSessions.length > 0 ? r.activeSessions.join(", ") : "None (off-hours — low liquidity)"}
+Active: ${sessionStr}
 
-=== HIGHER TIMEFRAME — H4 BIAS (PRIMARY FILTER) ===
-H4 Trend:      ${r.htf.trend} ← THIS DEFINES THE VALID TRADE DIRECTION
-H4 RSI:        ${r.htf.rsi.toFixed(1)} → ${htfRsiLabel}
+=== H4 STRUCTURE (PRIMARY FILTER) ===
+H4 Trend:      ${r.htf.trend} <- ONLY trade this direction
+H4 RSI:        ${r.htf.rsi.toFixed(1)} (${htfRsiLabel})
 H4 Resistance: ${r.htf.resistance.length > 0 ? r.htf.resistance.map(l => l.toFixed(d)).join(" | ") : "None"}
-H4 Support:    ${r.htf.support.length > 0    ? r.htf.support.map(l => l.toFixed(d)).join(" | ")    : "None"}
-H4 Last bar:   ${r.htf.lastBarBullish ? "Bullish close" : "Bearish close"} at ${r.htf.lastClose.toFixed(d)}
+H4 Support:    ${r.htf.support.length > 0 ? r.htf.support.map(l => l.toFixed(d)).join(" | ") : "None"}
 
-=== H1 TECHNICAL INDICATORS ===
-RSI(14):       ${r.rsi.toFixed(1)} → ${rsiLabel}
-MACD(12,26,9): Line ${r.macdLine.toFixed(d + 1)} | Signal ${r.signalLine.toFixed(d + 1)} | Hist ${r.histogram.toFixed(d + 1)} → ${macdDir}
-BB(20,2):      Upper ${r.bb.upper.toFixed(d)} | Mid ${r.bb.mid.toFixed(d)} | Lower ${r.bb.lower.toFixed(d)} | Pos ${bbPos}% → ${bbLabel}
-H1 Trend:      ${r.trend} (EMA20 vs EMA50)
+=== H1 SMART MONEY ANALYSIS ===
+Structure Bias: ${struct.bias}
+Price Zone:     ${struct.zone}${struct.inOTE ? " * OTE ZONE" : ""} (${pos}% of swing range)
+Swing Range:    ${struct.recentSwingLow.toFixed(d)} -> ${struct.recentSwingHigh.toFixed(d)}
+Last BOS/CHoCH: ${lastBOSStr}
 
-=== KEY LEVELS (H1) ===
-Resistance: ${r.resistance.length > 0 ? r.resistance.map(l => l.toFixed(d)).join(" | ") : "None"}
-Support:    ${r.support.length > 0    ? r.support.map(l => l.toFixed(d)).join(" | ")    : "None"}
-50-bar range: ${low50.toFixed(d)} — ${high50.toFixed(d)}
+Order Blocks (unmitigated, nearest first):
+${obLines}
 
-=== VOLATILITY ===
-ATR(14):       ${r.atr.toFixed(d)} | Suggested SL distance: ${atrSL} (1.5×ATR)
+Fair Value Gaps (unfilled, nearest first):
+${fvgLines}
+
+Liquidity Levels (nearest first):
+${liqLines}
+
+=== H1 CLASSICAL INDICATORS ===
+RSI(14):       ${r.rsi.toFixed(1)} -> ${rsiLabel}
+MACD(12,26,9): Line ${r.macdLine.toFixed(d + 1)} | Signal ${r.signalLine.toFixed(d + 1)} | Hist ${r.histogram.toFixed(d + 1)} -> ${macdDir}
+BB(20,2):      Upper ${r.bb.upper.toFixed(d)} | Mid ${r.bb.mid.toFixed(d)} | Lower ${r.bb.lower.toFixed(d)} | Pos ${bbPos}% -> ${bbLabel}
+EMA Trend:     ${r.trend} (EMA20 vs EMA50)
+ATR(14):       ${r.atr.toFixed(d)} | 1.5xATR: ${atrSL}
 
 === CANDLE PATTERNS (last 5 bars) ===
 ${patternStr}
@@ -173,13 +226,13 @@ ${patternStr}
 ${ohlcv}
 
 === TASK ===
-1. Confirm H4 bias — ONLY trade in that direction. Contra-trend = NO TRADE.
-2. Count H1 confluences strictly. Need ≥ 4 clear signals — do NOT stretch weak signals to reach the minimum.
-3. Check session: London or New York must be active. If not, output NO TRADE.
-4. Verify entry is within 0.3×ATR (${(r.atr * 0.3).toFixed(r.digits)}) of the structural level. If price has moved away, output NO TRADE.
-5. Confirm TP2 achieves at least 1:2.5 RR. If not achievable, output NO TRADE.
-6. If 4+ confluences align, place SL at 1.5×ATR (${atrSL}) beyond the invalidation level and output the signal.
-7. When in doubt, output NO TRADE. A high-quality signal log matters more than signal frequency.`
+1. Is H4 trend ${r.htf.trend}? Only take ${r.htf.trend === "UP" ? "BUY" : r.htf.trend === "DOWN" ? "SELL" : "NO"} setups.
+2. Is H1 structure (${struct.bias}) aligned with H4 (${r.htf.trend})? If not -> NO TRADE.
+3. Is price at an unmitigated OB, unfilled FVG, or key level? If not -> NO TRADE.
+4. Is price in the correct zone (DISCOUNT for BUY, PREMIUM for SELL)? If mid-range with no OB/FVG -> NO TRADE.
+5. Are 2+ classical confirmations present (RSI extreme, MACD crossover, candle pattern, active session)?
+6. Does TP2 achieve >=1:2.5 RR? If not -> NO TRADE.
+7. Only output a signal if ALL conditions pass. When in doubt -> NO TRADE.`
 }
 
 // ── JSON extraction helper ─────────────────────────────────────
