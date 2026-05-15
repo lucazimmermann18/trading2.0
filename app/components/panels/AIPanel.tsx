@@ -1,6 +1,6 @@
 "use client"
-import { useState, useMemo } from "react"
-import type { Pair, HistoryEntry } from "@/app/lib/types"
+import { useState, useMemo, useEffect } from "react"
+import type { Pair, HistoryEntry, Signal, ConfluenceItem } from "@/app/lib/types"
 import { fmt, timeAgo, SKILLSETS } from "@/app/lib/market-data"
 import { buildSMCContext } from "@/app/lib/smc"
 
@@ -70,6 +70,92 @@ function SkillsetSelect({ value, onChange }: { value: string; onChange: (s: stri
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+/* ── Signal Timer: age + expiry countdown ────────────────── */
+function SignalTimer({ signal }: { signal: Signal }) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const expiresAt = signal.expiresAt ?? signal.time + 8 * 3_600_000
+  const age       = now - signal.time
+  const total     = expiresAt - signal.time
+  const remaining = expiresAt - now
+  const pct       = Math.min(100, Math.max(0, (age / total) * 100))
+  const expired   = remaining <= 0
+
+  const dur = (ms: number) => {
+    const abs = Math.abs(ms)
+    const h = Math.floor(abs / 3_600_000)
+    const m = Math.floor((abs % 3_600_000) / 60_000)
+    return h > 0 ? `${h}h ${m}m` : `${m}m`
+  }
+
+  const barCol = pct < 50 ? "#00ff88" : pct < 80 ? "#ffb800" : "#ff3d5a"
+
+  return (
+    <div className="px-3 py-2.5 rounded-lg bg-white/[0.02] border border-white/[0.05] space-y-2">
+      <div className="flex items-center justify-between text-[10px]">
+        <span className="text-mute tracking-[0.12em] uppercase">Signal Age</span>
+        <span className="num text-white/80">{dur(age)} ago</span>
+      </div>
+      <div className="relative h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+        <div
+          className="absolute inset-y-0 left-0 rounded-full transition-all duration-1000"
+          style={{ width: `${pct}%`, background: barCol, boxShadow: `0 0 8px ${barCol}55` }}
+        />
+        {/* 50% marker */}
+        <div className="absolute inset-y-0 left-1/2 w-px bg-white/15" />
+      </div>
+      <div className="flex items-center justify-between text-[10px]">
+        <span className="text-mute tracking-[0.12em] uppercase">Expires</span>
+        {expired ? (
+          <span className="text-accent-red font-bold tracking-[0.14em] animate-pulse">EXPIRED</span>
+        ) : (
+          <span className="num font-semibold" style={{ color: barCol }}>in {dur(remaining)}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ── Confluence Checklist ─────────────────────────────────── */
+function ConfluenceChecklist({ confluences }: { confluences: ConfluenceItem[] }) {
+  const metCount  = confluences.filter(c => c.met).length
+  const total     = confluences.length
+  const scoreCol  = metCount >= 6 ? "#00ff88" : metCount >= 4 ? "#ffb800" : "#ff3d5a"
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[9px] tracking-[0.16em] uppercase text-mute">Confluence Score</span>
+        <div className="flex items-center gap-1.5">
+          <div className="h-1 w-16 rounded-full bg-white/[0.06] overflow-hidden">
+            <div className="h-full rounded-full" style={{ width: `${(metCount / total) * 100}%`, background: scoreCol }} />
+          </div>
+          <span className="num text-[11px] font-bold" style={{ color: scoreCol }}>{metCount}/{total}</span>
+        </div>
+      </div>
+      <div className="space-y-0.5">
+        {confluences.map((c, i) => (
+          <div key={i} className={`flex items-start gap-2 px-2 py-1.5 rounded-md transition-opacity ${c.met ? "" : "opacity-35"}`}>
+            <span className={`text-[11px] font-bold mt-px w-3.5 shrink-0 ${c.met ? "text-accent-green" : "text-white/30"}`}>
+              {c.met ? "✓" : "✗"}
+            </span>
+            <div className="flex-1 min-w-0">
+              <span className={`text-[10.5px] leading-none ${c.met ? "text-white/90" : "text-white/45"}`}>{c.label}</span>
+              {c.met && c.detail && (
+                <div className="text-[9px] text-mute/70 mt-0.5 num truncate">{c.detail}</div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -316,26 +402,45 @@ export default function AIPanel({ pair, skillset, setSkillset, history, threshol
           )}
         </Section>
 
-        {/* Last AI scan */}
-        <Section label="Last AI Scan" sub={timeAgo(pair.lastScan)}>
-          <div className="rounded-lg p-3 bg-white/[0.025] border border-white/[0.06]">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-[10px] tracking-[0.14em] text-mute">{pair.sym} · {pair.signal?.tf ?? "H1"}</div>
-              {pair.lastScan > 0 && <div className="text-[10px] num text-mute">{new Date(pair.lastScan).toLocaleTimeString()}</div>}
-            </div>
-            <div className="text-[12px] leading-relaxed text-white/85">
-              {trade ? pair.signal?.why : pair.reasoning}
-            </div>
-            {trade && pair.signal && (
-              <div className="mt-3 grid grid-cols-2 gap-2">
+        {/* Active Signal — timer + levels + confluence breakdown */}
+        {trade && pair.signal ? (
+          <Section label="Active Signal" sub={timeAgo(pair.lastScan)}>
+            <div className="space-y-3">
+              {/* Signal timer / expiry */}
+              <SignalTimer signal={pair.signal} />
+
+              {/* Entry / SL / TP levels */}
+              <div className="grid grid-cols-2 gap-1.5">
                 <KV label="Entry" v={fmt(pair.signal.entry, pair.digits)} color="#00d4ff"/>
                 <KV label="SL"    v={fmt(pair.signal.sl,    pair.digits)} color="#ff3d5a"/>
                 <KV label="TP1"   v={fmt(pair.signal.tp1,   pair.digits)} color="#00ff88"/>
                 <KV label="TP2"   v={fmt(pair.signal.tp2,   pair.digits)} color="#00ff88"/>
               </div>
-            )}
-          </div>
-        </Section>
+
+              {/* AI reasoning */}
+              <div className="rounded-md p-2.5 bg-white/[0.02] border border-white/[0.05]">
+                <div className="text-[10px] text-white/75 leading-relaxed">{pair.signal.why}</div>
+              </div>
+
+              {/* Confluence breakdown */}
+              {pair.signal.confluences && pair.signal.confluences.length > 0 && (
+                <div className="rounded-md p-2.5 bg-white/[0.02] border border-white/[0.05]">
+                  <ConfluenceChecklist confluences={pair.signal.confluences} />
+                </div>
+              )}
+            </div>
+          </Section>
+        ) : (
+          <Section label="Last AI Scan" sub={timeAgo(pair.lastScan)}>
+            <div className="rounded-lg p-3 bg-white/[0.025] border border-white/[0.06]">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[10px] tracking-[0.14em] text-mute">{pair.sym} · {pair.signal?.tf ?? "H1"}</div>
+                {pair.lastScan > 0 && <div className="text-[10px] num text-mute">{new Date(pair.lastScan).toLocaleTimeString()}</div>}
+              </div>
+              <div className="text-[12px] leading-relaxed text-white/85">{pair.reasoning}</div>
+            </div>
+          </Section>
+        )}
 
         {/* Confidence */}
         <Section label="AI Confidence">

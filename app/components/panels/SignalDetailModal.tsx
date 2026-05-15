@@ -1,6 +1,6 @@
 "use client"
 import { useRef } from "react"
-import type { HistoryEntry } from "@/app/lib/types"
+import type { HistoryEntry, ConfluenceItem } from "@/app/lib/types"
 import { fmt } from "@/app/lib/market-data"
 
 interface Props {
@@ -15,6 +15,7 @@ const LIFECYCLE_CFG: Record<string, { label: string; color: string; step: number
   SL:        { label: "Stopped",   color: "#ff3d5a", step: 2 },
   CLOSED:    { label: "Closed",    color: "#a78bfa", step: 4 },
   CANCELLED: { label: "Cancelled", color: "#5a6779", step: 0 },
+  EXPIRED:   { label: "Expired",   color: "#f59e0b", step: 0 },
 }
 
 const TIMELINE_STEPS = [
@@ -73,6 +74,20 @@ function RRBar({ rr }: { rr: string }) {
       <div className="flex justify-between text-[9px] num text-mute mt-1">
         <span className="text-accent-red">−1R risk</span>
         <span className="text-accent-green font-semibold">+{rr}R reward</span>
+      </div>
+    </div>
+  )
+}
+
+function ConfluenceRow({ c }: { c: ConfluenceItem }) {
+  return (
+    <div className={`flex items-start gap-3 py-1.5 border-b border-white/[0.04] last:border-0 ${c.met ? "" : "opacity-35"}`}>
+      <span className={`text-[12px] font-bold mt-px w-4 shrink-0 ${c.met ? "text-accent-green" : "text-white/30"}`}>
+        {c.met ? "✓" : "✗"}
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className={`text-[11.5px] ${c.met ? "text-white/90" : "text-white/40"}`}>{c.label}</div>
+        {c.met && c.detail && <div className="text-[10px] text-mute mt-0.5 num">{c.detail}</div>}
       </div>
     </div>
   )
@@ -211,6 +226,33 @@ export default function SignalDetailModal({ signal, onClose }: Props) {
             </div>
             <p className="text-[12.5px] text-white/80 leading-relaxed">{signal.why}</p>
           </div>
+
+          {/* Confluence breakdown */}
+          {signal.confluences && signal.confluences.length > 0 && (
+            <div className="px-5 py-4 border-b hairline">
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-[9.5px] tracking-[0.18em] uppercase text-mute">Confluence Breakdown</div>
+                <div className="flex items-center gap-2">
+                  {(() => {
+                    const met = signal.confluences!.filter(c => c.met).length
+                    const tot = signal.confluences!.length
+                    const col = met >= 6 ? "#00ff88" : met >= 4 ? "#ffb800" : "#ff3d5a"
+                    return (
+                      <>
+                        <div className="h-1.5 w-20 rounded-full bg-white/[0.06] overflow-hidden">
+                          <div className="h-full rounded-full" style={{ width: `${(met / tot) * 100}%`, background: col }} />
+                        </div>
+                        <span className="num text-[11px] font-bold" style={{ color: col }}>{met}/{tot}</span>
+                      </>
+                    )
+                  })()}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-x-6">
+                {signal.confluences.map((c, i) => <ConfluenceRow key={i} c={c} />)}
+              </div>
+            </div>
+          )}
 
           {/* Lifecycle timeline */}
           <div className="px-5 py-4 border-b hairline">

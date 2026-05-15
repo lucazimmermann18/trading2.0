@@ -27,6 +27,12 @@ export interface OHLCBar {
   volume?: number
 }
 
+export interface ConfluenceItem {
+  label: string
+  met: boolean
+  detail?: string
+}
+
 export interface Signal {
   side: "BUY" | "SELL"
   entry: number
@@ -39,6 +45,8 @@ export interface Signal {
   skillset: string
   why: string
   time: number
+  expiresAt: number
+  confluences?: ConfluenceItem[]
 }
 
 export interface HistoryEntry {
@@ -56,7 +64,9 @@ export interface HistoryEntry {
   skillset: string
   why: string
   time: number
-  state: "ACTIVE" | "CLOSED" | "CANCELLED" | "TP1" | "TP2" | "SL"
+  expiresAt?: number
+  confluences?: ConfluenceItem[]
+  state: "ACTIVE" | "CLOSED" | "CANCELLED" | "TP1" | "TP2" | "SL" | "EXPIRED"
   pnl_r?: number
   notes?: string
 }

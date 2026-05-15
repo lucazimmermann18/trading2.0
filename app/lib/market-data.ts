@@ -1,5 +1,34 @@
-import type { Pair, OHLCBar, Signal, Session, HistoryEntry } from "./types"
+import type { Pair, OHLCBar, Signal, Session, HistoryEntry, ConfluenceItem } from "./types"
 import { buildSMCContext, type SMCContext } from "./smc"
+
+// How long a signal stays valid per timeframe
+export const SIGNAL_EXPIRY_MS: Record<string, number> = {
+  M1:  30  * 60_000,
+  M5:  2   * 3_600_000,
+  M15: 4   * 3_600_000,
+  H1:  8   * 3_600_000,
+  H4:  32  * 3_600_000,
+  D1:  72  * 3_600_000,
+}
+
+export function buildConfluences(smc: SMCContext, side: "BUY" | "SELL"): ConfluenceItem[] {
+  const b    = side === "BUY"
+  const ob   = smc.orderBlocks.find(o => o.type === (b ? "bull" : "bear"))
+  const h4ob = smc.h4OrderBlocks.find(o => o.type === (b ? "bull" : "bear"))
+  const sw   = smc.sweeps.find(s => s.type === (b ? "bull" : "bear"))
+  const fvg  = smc.fvgs.find(f => f.type === (b ? "bull" : "bear"))
+  return [
+    { label: "D1 Bias",             met: b ? smc.daily.d1Bias === "UP"       : smc.daily.d1Bias === "DOWN",     detail: `D1 ${smc.daily.d1Bias}` },
+    { label: "H1 Market Structure", met: b ? smc.structure.bias === "BULLISH" : smc.structure.bias === "BEARISH", detail: smc.structure.bias },
+    { label: "H1 Order Block",      met: !!ob,   detail: ob   ? `${ob.low.toFixed(5)} – ${ob.high.toFixed(5)}` : undefined },
+    { label: "H4 Order Block",      met: !!h4ob, detail: h4ob ? "H4 confluence"                                : undefined },
+    { label: "Liquidity Sweep",     met: !!sw,   detail: sw   ? `${sw.barsAgo}H ago · str ${sw.strength}`      : undefined },
+    { label: "Fair Value Gap",      met: !!fvg,  detail: fvg  ? `${fvg.bottom.toFixed(5)} – ${fvg.top.toFixed(5)}` : undefined },
+    { label: "RSI Divergence",      met: !!smc.divergence && (b ? smc.divergence.type === "bullish" : smc.divergence.type === "bearish"),
+      detail: smc.divergence ? `${smc.divergence.type} ${smc.divergence.strength}` : undefined },
+    { label: "OTE Zone",            met: smc.structure.inOTE, detail: `${smc.structure.zone}${smc.structure.inOTE ? " / OTE" : ""}` },
+  ]
+}
 
 export const PAIRS_SEED: Omit<Pair, "id" | "active" | "status" | "signal" | "lastScan" | "history" | "reasoning" | "confidence" | "rsi" | "macd">[] = [
   { sym: "EUR/USD", name: "Euro / US Dollar",       group: "FX Major", px: 1.0891, digits: 5, spread: 0.6, vol: 0.00035 },

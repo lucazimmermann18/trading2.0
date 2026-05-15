@@ -18,6 +18,7 @@ import type { Pair, HistoryEntry, ViewId, Timeframe, AuditEntry, AuditKind, Syst
 import {
   buildInitialState,
   activeSessions, buildMarketContext, calcRSI, calcMACD,
+  buildConfluences, SIGNAL_EXPIRY_MS,
 } from "@/app/lib/market-data"
 import { fetchBars } from "@/app/lib/twelvedata"
 import { getCachedBars, isCacheStale, setCachedBars } from "@/app/lib/bar-cache"
@@ -221,11 +222,14 @@ export default function TradeApp() {
             results.set(p.id, null)
           } else {
             logEvent("signal", `${p.sym} ${data.side} · conf ${data.confidence}% · ${lat}ms`)
+            const now = Date.now()
             results.set(p.id, {
               side: data.side, confidence: data.confidence,
               entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
               rr: data.rr ?? "2.50", tf: timeframe, skillset,
-              why: data.reasoning, time: Date.now(),
+              why: data.reasoning, time: now,
+              expiresAt: now + (SIGNAL_EXPIRY_MS[timeframe] ?? SIGNAL_EXPIRY_MS.H1),
+              confluences: buildConfluences(ctx.smc, data.side),
             })
           }
         } catch {
@@ -321,11 +325,14 @@ export default function TradeApp() {
         logEvent("ai", `${p.sym} · ${settings.activeProvider} · ${lat}ms`)
         setMetrics(prev => ({ ...prev, lastAILatency: lat }))
         if (data.side !== "NO TRADE" && data.confidence >= threshold) {
+          const now = Date.now()
           sig = {
             side: data.side, confidence: data.confidence,
             entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
             rr: data.rr ?? "2.50", tf: timeframe, skillset,
-            why: `[${triggerLabel}] ${data.reasoning}`, time: Date.now(),
+            why: `[${triggerLabel}] ${data.reasoning}`, time: now,
+            expiresAt: now + (SIGNAL_EXPIRY_MS[timeframe] ?? SIGNAL_EXPIRY_MS.H1),
+            confluences: buildConfluences(ctx.smc, data.side),
           }
         }
       }
@@ -368,10 +375,11 @@ export default function TradeApp() {
       const pnlStr = `${pnl_r > 0 ? "+" : ""}${pnl_r.toFixed(2)}R`
       if (newState === "TP1") logEvent("tp", `${entry.sym} TP1 hit · ${pnlStr}`)
       else if (newState === "TP2") logEvent("tp", `${entry.sym} TP2 hit · ${pnlStr} (full target)`)
+      else if (newState === "EXPIRED") logEvent("scan", `${entry.sym} signal expired — setup no longer valid`)
       else logEvent("sl", `${entry.sym} stop loss hit · ${pnlStr}`)
       setMetrics(prev => ({
         ...prev,
-        tpCount: newState !== "SL" ? prev.tpCount + 1 : prev.tpCount,
+        tpCount: newState !== "SL" && newState !== "EXPIRED" ? prev.tpCount + 1 : prev.tpCount,
         slCount: newState === "SL" ? prev.slCount + 1 : prev.slCount,
       }))
     }, [logEvent]),
