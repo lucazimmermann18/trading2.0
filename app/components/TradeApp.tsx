@@ -171,6 +171,7 @@ export default function TradeApp() {
               support: ctx.swings.support, resistance: ctx.swings.resistance,
               activeSessions: ctx.activeSessions,
               atr: ctx.atr, candlePatterns: ctx.candlePatterns, htf: ctx.htf,
+              smc: ctx.smc,
             }),
           })
           const lat = Date.now() - t0
@@ -273,6 +274,7 @@ export default function TradeApp() {
           support: ctx.swings.support, resistance: ctx.swings.resistance,
           activeSessions: ctx.activeSessions,
           atr: ctx.atr, candlePatterns: ctx.candlePatterns, htf: ctx.htf,
+          smc: ctx.smc,
         }),
       })
       const lat = Date.now() - t0

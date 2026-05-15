@@ -9,7 +9,6 @@ interface PersistedState {
   threshold: number
   timeframe: string
   scannerOn: boolean
-  knowledge: Record<string, boolean>
 }
 
 const DEFAULTS: PersistedState = {
@@ -18,7 +17,6 @@ const DEFAULTS: PersistedState = {
   threshold: 75,
   timeframe: "H1",
   scannerOn: true,
-  knowledge: {},
 }
 
 export function usePersistedState() {
