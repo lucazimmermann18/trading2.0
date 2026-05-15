@@ -6,6 +6,7 @@ import LeftSidebar from "./layout/LeftSidebar"
 import ChartPanel from "./chart/ChartPanel"
 import AIPanel from "./panels/AIPanel"
 import Toast from "./panels/Toast"
+import SettingsModal from "./panels/SettingsModal"
 import MultiChartView from "./views/MultiChartView"
 import HeatmapView from "./views/HeatmapView"
 import type { Pair, HistoryEntry, KnowledgeModule, ViewId, Timeframe } from "@/app/lib/types"
@@ -13,6 +14,7 @@ import {
   buildInitialState, tickPair, makeSignal, KNOWLEDGE,
   activeSessions, pick, fmt,
 } from "@/app/lib/market-data"
+import { useAISettings } from "@/app/hooks/useAISettings"
 
 const REASONING_NO_TRADE = [
   "{sym} consolidating inside {h}/{l} range. Compression building, awaiting directional break.",
@@ -37,7 +39,9 @@ export default function TradeApp() {
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [sessions, setSessions] = useState(activeSessions())
   const [unread, setUnread] = useState(0)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const seededRef = useRef(false)
+  const aiSettings = useAISettings()
 
   useEffect(() => { setPairs(buildInitialState()) }, [])
 
@@ -54,45 +58,109 @@ export default function TradeApp() {
     return () => clearInterval(i)
   }, [scannerOn])
 
-  const runScan = useCallback(() => {
+  const runScan = useCallback(async () => {
     setScanning(true)
-    setTimeout(() => {
-      setPairs(prev => {
-        const active = prev.filter(p => p.active)
-        const dice = Math.random()
-        const winners = dice < 0.55 ? 1 : dice < 0.85 ? 0 : 2
-        const chosen = [...active].sort(() => Math.random() - 0.5).slice(0, winners).map(p => p.id)
-        return prev.map(p => {
-          if (!p.active) return p
-          const got = chosen.includes(p.id)
-          if (got) {
-            const sig = makeSignal(p, skillset)
-            if (sig.confidence >= threshold) {
-              setToast({ pair: p, signal: sig })
-              setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 80))
-              setUnread(u => u + 1)
-              return { ...p, status: "TRADE" as const, signal: sig, lastScan: Date.now(), confidence: sig.confidence }
+    const { settings } = aiSettings
+    const useAI = settings.useAI && !!settings.apiKeys[settings.activeProvider]
+
+    if (useAI) {
+      // AI-powered scan: call each active pair sequentially against the AI provider
+      const activePairs = pairs.filter(p => p.active)
+      const results: Map<number, NonNullable<Pair["signal"]> | null> = new Map()
+
+      await Promise.allSettled(
+        activePairs.map(async p => {
+          try {
+            const res = await fetch("/api/ai/analyze", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                provider: settings.activeProvider,
+                model: settings.selectedModels[settings.activeProvider],
+                apiKey: settings.apiKeys[settings.activeProvider],
+                sym: p.sym, px: p.px, digits: p.digits,
+                rsi: p.rsi, macd: p.macd, spread: p.spread,
+                history: p.history.slice(-20),
+                skillset,
+              }),
+            })
+            if (!res.ok) { results.set(p.id, null); return }
+            const data = await res.json()
+            if (data.side === "NO TRADE" || data.confidence < threshold) {
+              results.set(p.id, null)
+            } else {
+              results.set(p.id, {
+                side: data.side, confidence: data.confidence,
+                entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
+                rr: data.rr ?? "2.00", tf: timeframe, skillset,
+                why: data.reasoning, time: Date.now(),
+              })
             }
-          }
-          return {
-            ...p,
-            status: "NO TRADE" as const,
-            signal: null,
-            lastScan: Date.now(),
-            confidence: Math.floor(15 + Math.random() * 50),
-            reasoning: pick(REASONING_NO_TRADE)
-              .replace("{sym}", p.sym)
-              .replace("{h}", fmt(p.px + p.vol * 3, p.digits))
-              .replace("{l}", fmt(p.px - p.vol * 3, p.digits))
-              .replace("{entry}", fmt(p.px, p.digits)),
-            rsi: 30 + Math.random() * 40,
-            macd: (Math.random() - 0.5) * 0.5,
+          } catch {
+            results.set(p.id, null)
           }
         })
-      })
+      )
+
+      setPairs(prev => prev.map(p => {
+        if (!p.active) return p
+        const sig = results.get(p.id)
+        if (sig) {
+          setToast({ pair: p, signal: sig })
+          setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 80))
+          setUnread(u => u + 1)
+          return { ...p, status: "TRADE" as const, signal: sig, lastScan: Date.now(), confidence: sig.confidence }
+        }
+        return {
+          ...p, status: "NO TRADE" as const, signal: null, lastScan: Date.now(),
+          confidence: Math.floor(15 + Math.random() * 50),
+          reasoning: pick(REASONING_NO_TRADE)
+            .replace("{sym}", p.sym)
+            .replace("{h}", fmt(p.px + p.vol * 3, p.digits))
+            .replace("{l}", fmt(p.px - p.vol * 3, p.digits))
+            .replace("{entry}", fmt(p.px, p.digits)),
+          rsi: 30 + Math.random() * 40,
+          macd: (Math.random() - 0.5) * 0.5,
+        }
+      }))
       setScanning(false)
-    }, 1700)
-  }, [skillset, threshold])
+    } else {
+      // Simulated scan
+      setTimeout(() => {
+        setPairs(prev => {
+          const active = prev.filter(p => p.active)
+          const dice = Math.random()
+          const winners = dice < 0.55 ? 1 : dice < 0.85 ? 0 : 2
+          const chosen = [...active].sort(() => Math.random() - 0.5).slice(0, winners).map(p => p.id)
+          return prev.map(p => {
+            if (!p.active) return p
+            const got = chosen.includes(p.id)
+            if (got) {
+              const sig = makeSignal(p, skillset)
+              if (sig.confidence >= threshold) {
+                setToast({ pair: p, signal: sig })
+                setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 80))
+                setUnread(u => u + 1)
+                return { ...p, status: "TRADE" as const, signal: sig, lastScan: Date.now(), confidence: sig.confidence }
+              }
+            }
+            return {
+              ...p, status: "NO TRADE" as const, signal: null, lastScan: Date.now(),
+              confidence: Math.floor(15 + Math.random() * 50),
+              reasoning: pick(REASONING_NO_TRADE)
+                .replace("{sym}", p.sym)
+                .replace("{h}", fmt(p.px + p.vol * 3, p.digits))
+                .replace("{l}", fmt(p.px - p.vol * 3, p.digits))
+                .replace("{entry}", fmt(p.px, p.digits)),
+              rsi: 30 + Math.random() * 40,
+              macd: (Math.random() - 0.5) * 0.5,
+            }
+          })
+        })
+        setScanning(false)
+      }, 1700)
+    }
+  }, [skillset, threshold, timeframe, pairs, aiSettings])
 
   useEffect(() => {
     if (secondsLeft === 0 && scannerOn) runScan()
@@ -124,7 +192,6 @@ export default function TradeApp() {
   const onToggleActive = (id: number) =>
     setPairs(prev => prev.map(p => p.id === id ? { ...p, active: !p.active } : p))
 
-  // When a mini-chart card is clicked, jump to dashboard/chart view for that pair
   const handleOpenPair = (id: number) => {
     setSelectedId(id)
     setView("dashboard")
@@ -147,7 +214,7 @@ export default function TradeApp() {
         setScannerOn={setScannerOn}
         notifications={unread}
         sessions={sessions}
-        onOpenSettings={() => {}}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <div className="flex flex-1 min-h-0">
@@ -157,7 +224,6 @@ export default function TradeApp() {
           badges={{ journal: unread }}
         />
 
-        {/* Sidebar always visible */}
         <LeftSidebar
           pairs={pairs}
           selectedId={selectedId}
@@ -168,7 +234,6 @@ export default function TradeApp() {
           scannerOn={scannerOn}
         />
 
-        {/* Main content area */}
         {view === "dashboard" && (
           <>
             <ChartPanel pair={selected} timeframe={timeframe} setTimeframe={setTimeframe} />
@@ -194,7 +259,6 @@ export default function TradeApp() {
           <HeatmapView pairs={pairs} />
         )}
 
-        {/* Placeholder views for future implementation */}
         {(view === "performance" || view === "journal" || view === "replay" || view === "system") && (
           <ComingSoon view={view} />
         )}
@@ -206,13 +270,24 @@ export default function TradeApp() {
         onDismiss={() => setToast(null)}
         onView={() => { if (toast) { setSelectedId(toast.pair.id); setView("dashboard"); setToast(null) } }}
       />
+
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        pairs={pairs}
+        onTogglePair={onToggleActive}
+        skillset={skillset}
+        setSkillset={setSkillset}
+        threshold={threshold}
+        setThreshold={setThreshold}
+        aiSettings={aiSettings}
+      />
     </div>
   )
 }
 
 function ComingSoon({ view }: { view: ViewId }) {
   const labels: Record<string, string> = {
-    heatmap: "Market Heatmap",
     performance: "Performance",
     journal: "Signal Journal",
     replay: "Chart Replay",
