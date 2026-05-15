@@ -23,6 +23,8 @@ import { useAISettings } from "@/app/hooks/useAISettings"
 import { useTwelveDataWS } from "@/app/hooks/useTwelveDataWS"
 import { usePersistedState } from "@/app/hooks/usePersistedState"
 import { useNotificationSettings } from "@/app/hooks/useNotificationSettings"
+import { useZoneWatcher } from "@/app/hooks/useZoneWatcher"
+import { computeZones, type WatchedZone, ZONE_RECOMPUTE_MS } from "@/app/lib/zones"
 
 const REASONING_NO_TRADE = [
   "{sym} consolidating inside {h}/{l} range. Compression building, awaiting directional break.",
@@ -50,6 +52,7 @@ export default function TradeApp() {
   const [unread, setUnread] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [selectedSignal, setSelectedSignal] = useState<HistoryEntry | null>(null)
+  const [zones, setZones] = useState<WatchedZone[]>([])
   const seededRef = useRef(false)
   const aiSettings = useAISettings()
   const notifSettings = useNotificationSettings()
@@ -243,6 +246,82 @@ export default function TradeApp() {
     return () => clearTimeout(t)
   }, [pairs.length])
 
+  // ── Zone system ──────────────────────────────────────────────
+
+  // Recompute zones whenever pairs update, then every 5 min
+  useEffect(() => {
+    if (pairs.length === 0) return
+    const recompute = () =>
+      setZones(pairs.filter(p => p.active).flatMap(p => computeZones(p)))
+    recompute()
+    const i = setInterval(recompute, ZONE_RECOMPUTE_MS)
+    return () => clearInterval(i)
+  }, [pairs])
+
+  // Single-pair analysis triggered by zone entry
+  const runPairScan = useCallback(async (p: Pair, triggerLabel: string) => {
+    const { settings } = aiSettings
+    const useAI = settings.useAI && !!settings.apiKeys[settings.activeProvider]
+
+    let sig: NonNullable<Pair["signal"]> | null = null
+
+    if (useAI) {
+      try {
+        const ctx = buildMarketContext(p)
+        const res = await fetch("/api/ai/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: settings.activeProvider,
+            model: settings.selectedModels[settings.activeProvider],
+            apiKey: settings.apiKeys[settings.activeProvider],
+            sym: p.sym, px: p.px, digits: p.digits, spread: p.spread,
+            history: p.history.slice(-50), skillset, timeframe,
+            rsi: ctx.rsi, macdLine: ctx.macdLine, signalLine: ctx.signalLine,
+            histogram: ctx.histogram, bb: ctx.bb, trend: ctx.trend,
+            support: ctx.swings.support, resistance: ctx.swings.resistance,
+            activeSessions: ctx.activeSessions,
+          }),
+        })
+        if (res.ok) {
+          const data = await res.json()
+          if (data.side !== "NO TRADE" && data.confidence >= threshold) {
+            sig = {
+              side: data.side, confidence: data.confidence,
+              entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
+              rr: data.rr ?? "2.00", tf: timeframe, skillset,
+              why: `[Zone: ${triggerLabel}] ${data.reasoning}`, time: Date.now(),
+            }
+          }
+        }
+      } catch { /* silent */ }
+    } else {
+      const candidate = makeSignal(p, skillset)
+      if (candidate.confidence >= threshold) {
+        sig = { ...candidate, why: `[Zone: ${triggerLabel}] ${candidate.why}` }
+      }
+    }
+
+    if (!sig) return
+
+    setPairs(prev => prev.map(q =>
+      q.id !== p.id ? q : { ...q, status: "TRADE" as const, signal: sig!, lastScan: Date.now(), confidence: sig!.confidence }
+    ))
+    setToast({ pair: p, signal: sig })
+    setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig!, state: "ACTIVE" as const }, ...h].slice(0, 200))
+    setUnread(u => u + 1)
+    notifSettings.sendSignal({ ...sig, sym: p.sym, digits: p.digits })
+  }, [aiSettings, skillset, timeframe, threshold, notifSettings])
+
+  useZoneWatcher({
+    pairs: pairs.filter(p => p.active),
+    zones,
+    enabled: scannerOn,
+    onZoneEntry: useCallback((pair, zone) => {
+      runPairScan(pair, zone.label)
+    }, [runPairScan]),
+  })
+
   const toggleKnowledge = (k: string) =>
     setKnowledge(prev => {
       const next = prev.map(x => x.key === k ? { ...x, on: !x.on } : x)
@@ -306,6 +385,7 @@ export default function TradeApp() {
           secondsLeft={secondsLeft}
           scanning={scanning}
           scannerOn={scannerOn}
+          zones={zones}
         />
 
         {/* Main content area */}

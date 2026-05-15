@@ -2,6 +2,7 @@
 import { useState } from "react"
 import type { Pair } from "@/app/lib/types"
 import { fmt } from "@/app/lib/market-data"
+import { type WatchedZone, zoneColor } from "@/app/lib/zones"
 
 interface Props {
   pairs: Pair[]
@@ -11,6 +12,7 @@ interface Props {
   secondsLeft: number
   scanning: boolean
   scannerOn: boolean
+  zones: WatchedZone[]
 }
 
 function ScanTimer({ secondsLeft, scanning }: { secondsLeft: number; scanning: boolean }) {
@@ -48,12 +50,16 @@ function ScanTimer({ secondsLeft, scanning }: { secondsLeft: number; scanning: b
 }
 
 function PairRow({
-  p, selected, onSelect, onToggle,
+  p, selected, onSelect, onToggle, pairZones,
 }: {
-  p: Pair; selected: boolean; onSelect: () => void; onToggle: (e: React.MouseEvent) => void
+  p: Pair; selected: boolean
+  onSelect: () => void; onToggle: (e: React.MouseEvent) => void
+  pairZones: WatchedZone[]
 }) {
   const trade = p.status === "TRADE"
   const sigSide = p.signal?.side
+  // Nearest zone to current price
+  const nearest = pairZones.sort((a, b) => Math.abs(a.price - p.px) - Math.abs(b.price - p.px))[0]
 
   return (
     <div
@@ -67,7 +73,6 @@ function PairRow({
           <div className="text-[12.5px] font-semibold tracking-tight text-white">{p.sym}</div>
           <span className="text-[9px] tracking-[0.16em] text-mute uppercase">{p.group}</span>
         </div>
-        {/* Toggle */}
         <button
           onClick={onToggle}
           className={`relative w-7 h-4 rounded-full transition ${p.active ? "bg-accent-blue/60" : "bg-white/10"}`}
@@ -81,7 +86,7 @@ function PairRow({
         <div className="text-[10px] text-mute num">sp {p.spread.toFixed(p.spread < 1 ? 2 : 1)}</div>
       </div>
 
-      <div className="mt-2 flex items-center justify-between">
+      <div className="mt-2 flex items-center justify-between gap-2">
         {trade && sigSide ? (
           <>
             <div className={`flex items-center gap-1.5 px-2 h-5 rounded-[4px] text-[10px] font-bold tracking-[0.18em] whitespace-nowrap
@@ -95,12 +100,23 @@ function PairRow({
             NO TRADE
           </div>
         )}
+        {/* Zone indicator */}
+        {pairZones.length > 0 && nearest && (
+          <div
+            className="ml-auto flex items-center gap-1 px-1.5 h-5 rounded-[4px] text-[9px] font-semibold whitespace-nowrap"
+            style={{ background: zoneColor(nearest.type) + "18", color: zoneColor(nearest.type) }}
+            title={`${pairZones.length} zone${pairZones.length > 1 ? "s" : ""} — nearest: ${nearest.label}`}
+          >
+            <span className="w-1 h-1 rounded-full" style={{ background: zoneColor(nearest.type) }} />
+            {pairZones.length}Z
+          </div>
+        )}
       </div>
     </div>
   )
 }
 
-export default function LeftSidebar({ pairs, selectedId, onSelect, onToggleActive, secondsLeft, scanning, scannerOn }: Props) {
+export default function LeftSidebar({ pairs, selectedId, onSelect, onToggleActive, secondsLeft, scanning, scannerOn, zones }: Props) {
   const [search, setSearch] = useState("")
   const activeCount = pairs.filter(p => p.active).length
   const tradeCount = pairs.filter(p => p.status === "TRADE").length
@@ -155,6 +171,7 @@ export default function LeftSidebar({ pairs, selectedId, onSelect, onToggleActiv
             selected={p.id === selectedId}
             onSelect={() => onSelect(p.id)}
             onToggle={e => { e.stopPropagation(); onToggleActive(p.id) }}
+            pairZones={zones.filter(z => z.pairId === p.id)}
           />
         ))}
       </div>
