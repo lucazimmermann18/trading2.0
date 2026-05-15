@@ -7,9 +7,10 @@ interface Props {
   notifications: number
   sessions: Session[]
   onOpenSettings: () => void
+  wsConnected?: boolean
 }
 
-export default function TopNav({ scannerOn, setScannerOn, notifications, sessions, onOpenSettings }: Props) {
+export default function TopNav({ scannerOn, setScannerOn, notifications, sessions, onOpenSettings, wsConnected }: Props) {
   return (
     <div className="h-[60px] flex items-center px-5 panel border-l-0 border-r-0 border-t-0 shrink-0">
       {/* Brand */}
@@ -46,6 +47,16 @@ export default function TopNav({ scannerOn, setScannerOn, notifications, session
 
       {/* Right controls */}
       <div className="flex items-center gap-2">
+        {/* WebSocket indicator */}
+        <div className={`h-7 px-2.5 rounded-md flex items-center gap-1.5 text-[10px] font-medium tracking-[0.12em] border transition
+          ${wsConnected
+            ? "border-accent-blue/30 text-accent-blue bg-accent-blue/[0.06]"
+            : "border-white/[0.06] text-mute"}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? "bg-accent-blue animate-pulseDot" : "bg-white/20"}`}
+            style={wsConnected ? { boxShadow: "0 0 6px rgba(0,212,255,0.8)" } : {}} />
+          {wsConnected ? "WS LIVE" : "WS OFF"}
+        </div>
+
         <button
           onClick={() => setScannerOn(!scannerOn)}
           className={`h-8 px-3 rounded-md flex items-center gap-2 text-[11px] font-semibold tracking-[0.14em] transition

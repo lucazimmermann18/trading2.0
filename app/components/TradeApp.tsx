@@ -7,6 +7,7 @@ import ChartPanel from "./chart/ChartPanel"
 import AIPanel from "./panels/AIPanel"
 import Toast from "./panels/Toast"
 import SettingsModal from "./panels/SettingsModal"
+import SignalDetailModal from "./panels/SignalDetailModal"
 import MultiChartView from "./views/MultiChartView"
 import HeatmapView from "./views/HeatmapView"
 import PerformanceView from "./views/PerformanceView"
@@ -19,6 +20,7 @@ import {
   activeSessions, pick, fmt, generateHistory,
 } from "@/app/lib/market-data"
 import { useAISettings } from "@/app/hooks/useAISettings"
+import { useTwelveDataWS } from "@/app/hooks/useTwelveDataWS"
 
 const REASONING_NO_TRADE = [
   "{sym} consolidating inside {h}/{l} range. Compression building, awaiting directional break.",
@@ -44,8 +46,27 @@ export default function TradeApp() {
   const [sessions, setSessions] = useState(activeSessions())
   const [unread, setUnread] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [selectedSignal, setSelectedSignal] = useState<HistoryEntry | null>(null)
   const seededRef = useRef(false)
   const aiSettings = useAISettings()
+
+  // Live WebSocket prices
+  const activeSymbols = pairs.filter(p => p.active).map(p => p.sym)
+  const { connected: wsConnected } = useTwelveDataWS({
+    symbols: activeSymbols,
+    enabled: activeSymbols.length > 0,
+    onPrice: (sym, price) => {
+      setPairs(prev => prev.map(p => {
+        if (p.sym !== sym) return p
+        const now = Math.floor(Date.now() / 1000)
+        const last = p.history[p.history.length - 1]
+        const updHistory = last && now - last.time < 60
+          ? [...p.history.slice(0, -1), { ...last, close: price, high: Math.max(last.high, price), low: Math.min(last.low, price) }]
+          : [...p.history.slice(-219), { time: now, open: p.px, high: Math.max(p.px, price), low: Math.min(p.px, price), close: price, volume: 500 }]
+        return { ...p, px: price, history: updHistory }
+      }))
+    },
+  })
 
   // Build initial pairs + seed 14-day history
   useEffect(() => {
@@ -226,6 +247,7 @@ export default function TradeApp() {
         notifications={unread}
         sessions={sessions}
         onOpenSettings={() => setSettingsOpen(true)}
+        wsConnected={wsConnected}
       />
 
       <div className="flex flex-1 min-h-0">
@@ -269,7 +291,7 @@ export default function TradeApp() {
         {view === "multichart"   && <MultiChartView pairs={pairs} onOpen={handleOpenPair} />}
         {view === "heatmap"      && <HeatmapView pairs={pairs} />}
         {view === "performance"  && <PerformanceView history={history} />}
-        {view === "journal"      && <JournalView history={history} />}
+        {view === "journal"      && <JournalView history={history} onOpen={setSelectedSignal} />}
         {view === "replay"       && <ReplayView history={history} />}
         {view === "system"       && <SystemView />}
       </div>
@@ -281,6 +303,11 @@ export default function TradeApp() {
         onView={() => {
           if (toast) { setSelectedId(toast.pair.id); setView("dashboard"); setToast(null) }
         }}
+      />
+
+      <SignalDetailModal
+        signal={selectedSignal}
+        onClose={() => setSelectedSignal(null)}
       />
 
       <SettingsModal

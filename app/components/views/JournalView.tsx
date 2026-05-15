@@ -5,6 +5,7 @@ import { fmt } from "@/app/lib/market-data"
 
 interface Props {
   history: HistoryEntry[]
+  onOpen?: (s: HistoryEntry) => void
 }
 
 const LIFECYCLE: Record<string, { label: string; color: string }> = {
@@ -47,7 +48,7 @@ const FILTERS = [
   { k: "losses", label: "Losses" },
 ] as const
 
-export default function JournalView({ history }: Props) {
+export default function JournalView({ history, onOpen }: Props) {
   const [filter, setFilter] = useState<typeof FILTERS[number]["k"]>("all")
   const [q, setQ] = useState("")
   const [sort, setSort] = useState<"time" | "conf" | "pnl">("time")
@@ -150,6 +151,7 @@ export default function JournalView({ history }: Props) {
                 const pnlColor = pnl == null ? "#5a6779" : pnl > 0 ? "#00ff88" : "#ff3d5a"
                 return (
                   <tr key={s.id ?? i}
+                    onClick={() => onOpen?.(s)}
                     className="border-b border-white/[0.03] hover:bg-white/[0.025] transition cursor-pointer">
                     <td className="px-3 py-2.5 num text-mute whitespace-nowrap">
                       {new Date(s.time).toLocaleString(undefined, {
