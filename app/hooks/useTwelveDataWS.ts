@@ -2,12 +2,15 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 
 const WS_URL = "wss://ws.twelvedata.com/v1/quotes/price"
-const API_KEY = "36d7c96edf3c44a4a50a69a03dde49cc"
+const API_KEY = process.env.NEXT_PUBLIC_TWELVE_DATA_API_KEY ?? ""
 
 const SYM_MAP: Record<string, string> = {
-  "US100": "NDX",
-  "US30":  "DJI",
-  "WTI":   "WTI/USD",
+  "US100":  "NDX",
+  "US30":   "DJI",
+  "WTI":    "WTI/USD",
+  "US500":  "SPX",
+  "GER40":  "DAX",
+  "NATGAS": "NATGAS/USD",
 }
 // Reverse map: WS symbol → app symbol
 const REV_MAP: Record<string, string> = Object.fromEntries(

@@ -1,8 +1,9 @@
 "use client"
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import type { Pair, Timeframe, OHLCBar } from "@/app/lib/types"
 import { fmt } from "@/app/lib/market-data"
 import { fetchBars } from "@/app/lib/twelvedata"
+import { buildSMCContext, type SMCContext } from "@/app/lib/smc"
 
 const TIMEFRAMES: Timeframe[] = ["M1", "M5", "M15", "H1", "H4", "D1"]
 
@@ -95,16 +96,12 @@ function RSIChart({ bars }: { bars: OHLCBar[] }) {
         <div className="num text-[10px] font-semibold" style={{ color: col }}>{lastRSI.toFixed(1)}</div>
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 64 }} preserveAspectRatio="none">
-        {/* OB/OS zones */}
         <rect x={0} y={pad} width={W} height={toY(70) - pad} fill="rgba(255,61,90,0.04)" />
         <rect x={0} y={toY(30)} width={W} height={H - toY(30) - pad} fill="rgba(0,255,136,0.04)" />
-        {/* OB/OS lines */}
         <line x1={0} x2={W} y1={toY(70)} y2={toY(70)} stroke="rgba(255,61,90,0.3)" strokeWidth="0.5" strokeDasharray="3 3" />
         <line x1={0} x2={W} y1={toY(50)} y2={toY(50)} stroke="rgba(255,255,255,0.08)" strokeWidth="0.5" />
         <line x1={0} x2={W} y1={toY(30)} y2={toY(30)} stroke="rgba(0,255,136,0.3)"  strokeWidth="0.5" strokeDasharray="3 3" />
-        {/* RSI line */}
         <path d={path} stroke={col} strokeWidth="1.2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-        {/* OB/OS labels */}
         <text x={W - 4} y={toY(70) - 2} textAnchor="end" fill="rgba(255,61,90,0.5)" fontSize="8" fontFamily="JetBrains Mono">70</text>
         <text x={W - 4} y={toY(30) - 2} textAnchor="end" fill="rgba(0,255,136,0.5)" fontSize="8" fontFamily="JetBrains Mono">30</text>
       </svg>
@@ -147,9 +144,7 @@ function MACDChart({ bars }: { bars: OHLCBar[] }) {
         </div>
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 64 }} preserveAspectRatio="none">
-        {/* Zero line */}
         <line x1={0} x2={W} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.12)" strokeWidth="0.5" />
-        {/* Histogram bars */}
         {hist.slice(25).map((v, i) => {
           const x = pad + ((i + 25) / (hist.length - 1)) * (W - pad * 2)
           const top = Math.min(toY(v), zeroY)
@@ -157,18 +152,26 @@ function MACDChart({ bars }: { bars: OHLCBar[] }) {
           const col = v >= 0 ? "rgba(0,255,136,0.4)" : "rgba(255,61,90,0.4)"
           return <rect key={i} x={x - barW * 0.3} y={top} width={barW * 0.6} height={Math.max(1, h)} fill={col} />
         })}
-        {/* MACD line */}
         {macdPath && <path d={macdPath} stroke="#00d4ff" strokeWidth="1" fill="none" strokeLinecap="round" />}
-        {/* Signal line */}
         {sigPath && <path d={sigPath} stroke="#ff8800" strokeWidth="1" fill="none" strokeLinecap="round" />}
       </svg>
     </div>
   )
 }
 
+/* ── SVG helpers for SMC overlay ─────────────────────────── */
+const NS = "http://www.w3.org/2000/svg"
+
+function svgEl(tag: string, attrs: Record<string, string>) {
+  const el = document.createElementNS(NS, tag)
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v)
+  return el
+}
+
 /* ── Main ChartPanel ─────────────────────────────────────── */
 export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const svgRef       = useRef<SVGSVGElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chartRef   = useRef<any>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -187,7 +190,12 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
   const [loading, setLoading] = useState(true)
   const [chartType, setChartType] = useState<"candle" | "line">("candle")
   const [indicators, setIndicators] = useState({ bb: false, rsi: false, macd: false })
+  const [smcVisible, setSmcVisible] = useState(true)
   const [bars, setBars] = useState<OHLCBar[]>([])
+  const [smcCtx, setSmcCtx] = useState<SMCContext | null>(null)
+
+  // Keep a ref to the redraw fn so the ResizeObserver (created once) can call it
+  const redrawRef = useRef<() => void>(() => {})
 
   const trade = pair.status === "TRADE"
   const pxColor = pair.history.length >= 2
@@ -197,6 +205,171 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
 
   const toggleIndicator = (key: keyof typeof indicators) =>
     setIndicators(s => ({ ...s, [key]: !s[key] }))
+
+  // Compute SMC context whenever new H1 bars are loaded (not on every tick)
+  useEffect(() => {
+    if (pair.history.length >= 50) {
+      setSmcCtx(buildSMCContext(pair.history, pair.px))
+    } else {
+      setSmcCtx(null)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pair.history.length])
+
+  // Draw SMC overlay onto the SVG element
+  const drawSMC = useCallback(() => {
+    const svg = svgRef.current
+    const series = candleRef.current
+    const chart = chartRef.current
+    const container = containerRef.current
+    if (!svg || !series || !chart || !container || !smcCtx || !smcVisible) {
+      if (svg) svg.innerHTML = ""
+      return
+    }
+
+    const W = container.clientWidth
+    const H = container.clientHeight
+    svg.setAttribute("width",   String(W))
+    svg.setAttribute("height",  String(H))
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`)
+    svg.innerHTML = ""
+
+    const ts = chart.timeScale()
+    // Leave right margin for price scale (~68px)
+    const chartW = W - 68
+
+    // price → Y pixel; returns null if out of visible range
+    const py = (price: number): number | null => {
+      const c = series.priceToCoordinate(price)
+      return (c == null || isNaN(c)) ? null : c
+    }
+
+    // Draw filled rectangle between two price levels
+    const rect = (hiPrice: number, loPrice: number, fill: string, stroke: string, label: string) => {
+      const y1 = py(hiPrice)
+      const y2 = py(loPrice)
+      if (y1 == null || y2 == null) return
+      const top = Math.min(y1, y2)
+      const h   = Math.max(Math.abs(y1 - y2), 2)
+
+      svg.appendChild(svgEl("rect", {
+        x: "0", y: String(top),
+        width: String(chartW), height: String(h),
+        fill, stroke, "stroke-width": "1",
+      }))
+      if (label && h > 10) {
+        const txt = svgEl("text", {
+          x: "5", y: String(top + Math.min(12, h - 2)),
+          fill: stroke, "font-size": "9",
+          "font-family": "JetBrains Mono, monospace",
+          opacity: "0.85",
+        })
+        txt.textContent = label
+        svg.appendChild(txt)
+      }
+    }
+
+    // Draw horizontal dashed line at a price
+    const hline = (price: number, color: string, dash: string, label: string) => {
+      const y = py(price)
+      if (y == null) return
+      svg.appendChild(svgEl("line", {
+        x1: "0", x2: String(chartW),
+        y1: String(y), y2: String(y),
+        stroke: color, "stroke-width": "1", "stroke-dasharray": dash,
+      }))
+      if (label) {
+        const txt = svgEl("text", {
+          x: String(chartW - 4), y: String(y - 3),
+          "text-anchor": "end",
+          fill: color, "font-size": "9",
+          "font-family": "JetBrains Mono, monospace",
+          opacity: "0.85",
+        })
+        txt.textContent = label
+        svg.appendChild(txt)
+      }
+    }
+
+    // ── Layer 1: FVGs (most transparent, below OBs) ──────────
+    for (const fvg of smcCtx.fvgs) {
+      const fill   = fvg.type === "bull" ? "rgba(0,212,255,0.06)" : "rgba(255,140,0,0.06)"
+      const stroke = fvg.type === "bull" ? "rgba(0,212,255,0.3)"  : "rgba(255,140,0,0.3)"
+      rect(fvg.top, fvg.bottom, fill, stroke, "FVG")
+    }
+
+    // ── Layer 2: Weekly / Daily key levels ───────────────────
+    if (smcCtx.daily.weekHigh) hline(smcCtx.daily.weekHigh, "rgba(168,139,250,0.45)", "6 4", "W.High")
+    if (smcCtx.daily.weekLow)  hline(smcCtx.daily.weekLow,  "rgba(168,139,250,0.45)", "6 4", "W.Low")
+    if (smcCtx.daily.pdHigh)   hline(smcCtx.daily.pdHigh,   "rgba(251,191,36,0.6)",   "5 3", "PDH")
+    if (smcCtx.daily.pdLow)    hline(smcCtx.daily.pdLow,    "rgba(251,191,36,0.6)",   "5 3", "PDL")
+
+    // ── Layer 3: Liquidity levels (BSL / SSL) ────────────────
+    for (const liq of smcCtx.liquidity) {
+      const label = liq.type === "buyside" ? `BSL(${liq.touches})` : `SSL(${liq.touches})`
+      hline(liq.price, "rgba(255,136,0,0.55)", "3 3", label)
+    }
+
+    // ── Layer 4: H4 Order Blocks (more opaque) ───────────────
+    for (const ob of smcCtx.h4OrderBlocks) {
+      if (ob.type === "bull") rect(ob.high, ob.low, "rgba(0,255,136,0.11)", "rgba(0,255,136,0.65)", "H4·OB")
+      else                    rect(ob.high, ob.low, "rgba(255,61,90,0.11)", "rgba(255,61,90,0.65)",  "H4·OB")
+    }
+
+    // ── Layer 5: H1 Order Blocks ─────────────────────────────
+    for (const ob of smcCtx.orderBlocks) {
+      if (ob.type === "bull") rect(ob.high, ob.low, "rgba(0,255,136,0.06)", "rgba(0,255,136,0.4)", "OB")
+      else                    rect(ob.high, ob.low, "rgba(255,61,90,0.06)", "rgba(255,61,90,0.4)",  "OB")
+    }
+
+    // ── Layer 6: Liquidity Sweep markers ─────────────────────
+    for (const sweep of smcCtx.sweeps) {
+      const barIdx = pair.history.length - 1 - sweep.barsAgo
+      const bar = pair.history[barIdx]
+      if (!bar) continue
+      const xCoord = ts.timeToCoordinate(bar.time as number)
+      if (xCoord == null || isNaN(xCoord) || xCoord < 0 || xCoord > chartW) continue
+
+      const yPrice = sweep.type === "bull" ? bar.low : bar.high
+      const y = py(yPrice)
+      if (y == null) continue
+
+      const col  = sweep.type === "bull" ? "rgba(0,255,136,0.9)" : "rgba(255,61,90,0.9)"
+      const sz   = 5 + sweep.strength * 2
+      const offset = sweep.type === "bull" ? 10 : -10
+      const pts  = sweep.type === "bull"
+        ? `${xCoord},${y + offset} ${xCoord - sz},${y + offset + sz} ${xCoord + sz},${y + offset + sz}`
+        : `${xCoord},${y + offset} ${xCoord - sz},${y + offset - sz} ${xCoord + sz},${y + offset - sz}`
+
+      svg.appendChild(svgEl("polygon", { points: pts, fill: col }))
+
+      const lbl = svgEl("text", {
+        x: String(xCoord + 8), y: String(y + (sweep.type === "bull" ? offset + sz + 10 : offset - sz - 2)),
+        fill: col, "font-size": "8",
+        "font-family": "JetBrains Mono, monospace",
+        opacity: "0.9",
+      })
+      lbl.textContent = "⚡SWEEP"
+      svg.appendChild(lbl)
+    }
+  }, [smcCtx, smcVisible, pair.history])
+
+  // Keep ref in sync so ResizeObserver can call it
+  useEffect(() => { redrawRef.current = drawSMC }, [drawSMC])
+
+  // Subscribe to chart scroll/zoom events to redraw overlay
+  useEffect(() => {
+    if (!chartRef.current) return
+    if (!smcCtx || !smcVisible) {
+      if (svgRef.current) svgRef.current.innerHTML = ""
+      return
+    }
+    chartRef.current.timeScale().subscribeVisibleLogicalRangeChange(drawSMC)
+    drawSMC()
+    return () => {
+      chartRef.current?.timeScale().unsubscribeVisibleLogicalRangeChange(drawSMC)
+    }
+  }, [smcCtx, smcVisible, drawSMC])
 
   // Init chart once
   useEffect(() => {
@@ -246,7 +419,6 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
       vol.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } })
       volumeRef.current = vol
 
-      // Bollinger Bands (overlay on main scale, hidden by default)
       bbU = chart.addSeries(LineSeries, { color: "rgba(0,212,255,0.35)", lineWidth: 1, visible: false, priceLineVisible: false, lastValueVisible: false })
       bbM = chart.addSeries(LineSeries, { color: "rgba(0,212,255,0.20)", lineWidth: 1, lineStyle: 2, visible: false, priceLineVisible: false, lastValueVisible: false })
       bbL = chart.addSeries(LineSeries, { color: "rgba(0,212,255,0.35)", lineWidth: 1, visible: false, priceLineVisible: false, lastValueVisible: false })
@@ -257,6 +429,7 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
       ro = new ResizeObserver(() => {
         if (containerRef.current) {
           chart.applyOptions({ width: containerRef.current.clientWidth, height: containerRef.current.clientHeight })
+          setTimeout(() => redrawRef.current(), 60)
         }
       })
       if (containerRef.current) ro.observe(containerRef.current)
@@ -300,7 +473,6 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
       lineRef.current?.setData(ld)
       volumeRef.current?.setData(vd)
 
-      // Bollinger Bands data
       const closes = loadedBars.map(b => b.close)
       const { upper, mid, lower } = calcBB(closes)
       const bbData = (vals: number[]) =>
@@ -311,6 +483,8 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
 
       chartRef.current?.timeScale().fitContent()
       setLoading(false)
+      // Redraw SMC overlay after new bars are set
+      setTimeout(() => redrawRef.current(), 100)
     }
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -324,8 +498,7 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
     lineRef.current?.update({ time: last.time, value: last.close })
     setBars(prev => {
       if (!prev.length) return prev
-      const updated = [...prev.slice(0, -1), { ...prev[prev.length - 1], close: last.close }]
-      return updated
+      return [...prev.slice(0, -1), { ...prev[prev.length - 1], close: last.close }]
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pair.px])
@@ -372,6 +545,19 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
 
         <div className="flex-1" />
 
+        {/* SMC overlay toggle */}
+        <div className="flex items-center gap-1 px-1 py-0.5 rounded-md glass">
+          <button
+            onClick={() => setSmcVisible(s => !s)}
+            title="Toggle SMC zones overlay (Order Blocks, FVGs, Sweeps, PDH/PDL)"
+            className={`h-7 px-2.5 rounded-[5px] text-[11px] font-medium num transition
+              ${smcVisible ? "bg-white/[0.08]" : "text-mute hover:text-white"}`}
+            style={smcVisible ? { color: "#a78bfa" } : {}}
+          >
+            SMC
+          </button>
+        </div>
+
         {/* Indicator toggles */}
         <div className="flex items-center gap-1 px-1 py-0.5 rounded-md glass">
           {INDS.map(ind => (
@@ -415,11 +601,17 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
 
       {/* Chart area + sub-charts */}
       <div className="flex-1 flex flex-col min-h-0 relative">
-        {/* Main chart */}
+        {/* Main chart with SMC SVG overlay */}
         <div className="flex-1 relative min-h-0">
           <div ref={containerRef} className="w-full h-full" />
+          {/* SMC overlay — drawn by drawSMC(), always present so subscriptions work */}
+          <svg
+            ref={svgRef}
+            className="absolute inset-0 pointer-events-none"
+            style={{ zIndex: 2 }}
+          />
           {loading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-ink-900/80">
+            <div className="absolute inset-0 flex items-center justify-center bg-ink-900/80" style={{ zIndex: 10 }}>
               <div className="w-8 h-8 border-2 border-white/10 border-t-accent-blue rounded-full animate-spin" />
             </div>
           )}
@@ -432,7 +624,7 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
         {indicators.macd && bars.length > 26 && <MACDChart bars={bars} />}
       </div>
 
-      {/* Signal levels overlay */}
+      {/* Signal levels overlay (top-right corner) */}
       {trade && pair.signal && (
         <div className="absolute right-16 top-16 flex flex-col gap-1.5 text-[10px] num pointer-events-none z-10">
           <div className="px-2 py-1 rounded bg-accent-blue/20 text-accent-blue border border-accent-blue/30">E {fmt(pair.signal.entry, pair.digits)}</div>

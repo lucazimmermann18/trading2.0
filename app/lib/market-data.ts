@@ -16,6 +16,21 @@ export const PAIRS_SEED: Omit<Pair, "id" | "active" | "status" | "signal" | "las
   { sym: "US100",   name: "Nasdaq 100",             group: "Index",    px: 18432.5, digits: 1, spread: 1.0, vol: 6.0 },
   { sym: "US30",    name: "Dow Jones 30",           group: "Index",    px: 39872.1, digits: 1, spread: 1.5, vol: 8.0 },
   { sym: "WTI",     name: "Crude Oil WTI",          group: "Energy",   px: 78.34, digits: 2, spread: 0.03, vol: 0.06 },
+  // FX Crosses
+  { sym: "GBP/JPY", name: "Pound / Yen",            group: "FX Cross", px: 198.42,  digits: 3, spread: 1.8,  vol: 0.06 },
+  { sym: "EUR/JPY", name: "Euro / Yen",             group: "FX Cross", px: 170.38,  digits: 3, spread: 1.4,  vol: 0.05 },
+  { sym: "EUR/GBP", name: "Euro / Pound",           group: "FX Cross", px: 0.8612,  digits: 5, spread: 0.9,  vol: 0.00030 },
+  { sym: "AUD/JPY", name: "Aussie / Yen",           group: "FX Cross", px: 103.12,  digits: 3, spread: 1.5,  vol: 0.04 },
+  { sym: "GBP/AUD", name: "Pound / Aussie",         group: "FX Cross", px: 1.9186,  digits: 5, spread: 2.1,  vol: 0.00060 },
+  { sym: "EUR/AUD", name: "Euro / Aussie",          group: "FX Cross", px: 1.6544,  digits: 5, spread: 1.8,  vol: 0.00050 },
+  // Crypto
+  { sym: "SOL/USD", name: "Solana",                 group: "Crypto",   px: 168.45,  digits: 2, spread: 0.25, vol: 1.8 },
+  { sym: "XRP/USD", name: "Ripple",                 group: "Crypto",   px: 0.5842,  digits: 4, spread: 0.002, vol: 0.08 },
+  // Indices
+  { sym: "US500",   name: "S&P 500",                group: "Index",    px: 5312.8,  digits: 1, spread: 0.5,  vol: 3.0 },
+  { sym: "GER40",   name: "DAX 40",                 group: "Index",    px: 18724.5, digits: 1, spread: 1.2,  vol: 7.0 },
+  // Energy
+  { sym: "NATGAS",  name: "Natural Gas",             group: "Energy",   px: 2.342,   digits: 3, spread: 0.004, vol: 0.05 },
 ]
 
 export const SKILLSETS = [
