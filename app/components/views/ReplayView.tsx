@@ -1,0 +1,256 @@
+"use client"
+import { useState, useEffect, useMemo } from "react"
+import type { HistoryEntry } from "@/app/lib/types"
+import { fmt } from "@/app/lib/market-data"
+
+interface Props { history: HistoryEntry[] }
+
+const LIFECYCLE: Record<string, { label: string; color: string }> = {
+  ACTIVE: { label: "ACTIVE", color: "#00d4ff" },
+  TP1:    { label: "TP1 ✓", color: "#00ff88" },
+  TP2:    { label: "TP2 ✓", color: "#00ff88" },
+  SL:     { label: "SL ✗",  color: "#ff3d5a" },
+  CLOSED: { label: "CLOSED",color: "#a78bfa" },
+  CANCELLED: { label: "VOID", color: "#5a6779" },
+}
+
+function LifecycleBadge({ state }: { state: string }) {
+  const cfg = LIFECYCLE[state] ?? { label: state, color: "#5a6779" }
+  return (
+    <span className="px-2 h-[22px] inline-flex items-center rounded-[4px] text-[10px] font-bold tracking-[0.16em]"
+      style={{ background: cfg.color + "22", color: cfg.color }}>{cfg.label}</span>
+  )
+}
+
+function KVMini({ label, value, color = "#ffffff" }: { label: string; value: string; color?: string }) {
+  return (
+    <div className="px-3 py-2 rounded-md bg-white/[0.025]">
+      <div className="text-[9px] text-mute tracking-[0.16em] uppercase">{label}</div>
+      <div className="num text-[14px] mt-0.5 font-semibold" style={{ color }}>{value}</div>
+    </div>
+  )
+}
+
+function ReplayChart({ signal }: { signal: HistoryEntry }) {
+  const data = useMemo(() => {
+    const out: { open: number; high: number; low: number; close: number }[] = []
+    const vol = Math.abs(signal.entry - signal.sl) * 0.4
+    let prev = signal.entry - vol * 3
+    for (let i = 0; i < 80; i++) {
+      const drift = (Math.random() - 0.5) * vol
+      const open = i === 0 ? prev : out[i - 1].close
+      const close = open + drift + (i > 40 ? (signal.side === "BUY" ? vol * 0.08 : -vol * 0.08) : 0)
+      const high = Math.max(open, close) + Math.random() * vol * 0.4
+      const low  = Math.min(open, close) - Math.random() * vol * 0.4
+      out.push({ open, high, low, close })
+      prev = close
+    }
+    return out
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signal.time])
+
+  const W = 900, H = 220, pad = 8
+  const allPrices = data.flatMap(d => [d.high, d.low])
+  const min = Math.min(...allPrices, signal.sl, signal.tp2)
+  const max = Math.max(...allPrices, signal.sl, signal.tp2)
+  const cw = (W - pad * 2) / data.length
+  const yv = (v: number) => pad + (1 - (v - min) / (max - min || 1)) * (H - pad * 2)
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[240px] block rounded-md overflow-hidden">
+      <rect width={W} height={H} fill="rgba(10,14,26,0.6)" />
+      {/* Level lines */}
+      <line x1={pad} x2={W - pad} y1={yv(signal.entry)} y2={yv(signal.entry)} stroke="#00d4ff" strokeWidth="1.5" />
+      <line x1={pad} x2={W - pad} y1={yv(signal.sl)}    y2={yv(signal.sl)}    stroke="#ff3d5a" strokeWidth="1" strokeDasharray="4 4" />
+      <line x1={pad} x2={W - pad} y1={yv(signal.tp1)}   y2={yv(signal.tp1)}   stroke="#00ff88" strokeWidth="1" strokeDasharray="4 4" />
+      <line x1={pad} x2={W - pad} y1={yv(signal.tp2)}   y2={yv(signal.tp2)}   stroke="#00ff88" strokeWidth="1.2" strokeDasharray="4 4" />
+      {/* Candles */}
+      {data.map((b, i) => {
+        const x = pad + i * cw
+        const up = b.close >= b.open
+        const col = up ? "#00ff88" : "#ff3d5a"
+        const bodyTop = yv(Math.max(b.open, b.close))
+        const bodyH   = Math.max(1, Math.abs(yv(b.open) - yv(b.close)))
+        return (
+          <g key={i}>
+            <line x1={x + cw / 2} x2={x + cw / 2} y1={yv(b.high)} y2={yv(b.low)}
+              stroke={up ? "rgba(0,255,136,0.5)" : "rgba(255,61,90,0.5)"} strokeWidth="1" />
+            <rect x={x + 1} y={bodyTop} width={Math.max(1, cw - 2)} height={bodyH} fill={col} opacity="0.85" />
+          </g>
+        )
+      })}
+      {/* Labels */}
+      {[
+        { v: signal.entry, label: `E ${fmt(signal.entry, signal.digits)}`,  col: "#00d4ff" },
+        { v: signal.sl,    label: `SL ${fmt(signal.sl,    signal.digits)}`,  col: "#ff3d5a" },
+        { v: signal.tp2,   label: `TP2 ${fmt(signal.tp2,  signal.digits)}`,  col: "#00ff88" },
+      ].map(({ v, label, col }) => (
+        <text key={label} x={W - pad - 4} y={Math.max(14, Math.min(H - 4, yv(v) - 4))}
+          textAnchor="end" fill={col} fontSize="9" fontFamily="JetBrains Mono, monospace" opacity="0.9">
+          {label}
+        </text>
+      ))}
+    </svg>
+  )
+}
+
+export default function ReplayView({ history }: Props) {
+  const sorted = useMemo(() => [...history].sort((a, b) => a.time - b.time), [history])
+  const total = sorted.length
+  const [idx, setIdx] = useState(0)
+  const [playing, setPlaying] = useState(false)
+  const [speed, setSpeed] = useState(600)
+
+  useEffect(() => {
+    if (!playing) return
+    const i = setInterval(() => {
+      setIdx(v => {
+        if (v >= total - 1) { setPlaying(false); return v }
+        return v + 1
+      })
+    }, speed)
+    return () => clearInterval(i)
+  }, [playing, total, speed])
+
+  if (!total) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 text-mute">
+        <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" strokeWidth="1" opacity="0.3">
+          <polygon points="5 3 19 12 5 21 5 3"/>
+        </svg>
+        <div className="text-[13px]">No history yet — run a scan first</div>
+      </div>
+    )
+  }
+
+  const s = sorted[idx]
+  if (!s) return null
+  const pnlColor = s.pnl_r == null ? "#5a6779" : s.pnl_r > 0 ? "#00ff88" : "#ff3d5a"
+
+  return (
+    <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+      {/* Header */}
+      <div className="flex items-end justify-between px-6 pt-5 pb-4 border-b hairline shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-md bg-accent-blue/10 text-accent-blue flex items-center justify-center">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+          </div>
+          <div>
+            <div className="text-[18px] font-semibold text-white tracking-tight">Signal Replay</div>
+            <div className="text-[11px] text-mute mt-0.5">Step through {total} historical signals</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 text-[10.5px] text-mute">
+          <span>Speed:</span>
+          {[{ label: "0.5×", ms: 1200 }, { label: "1×", ms: 600 }, { label: "2×", ms: 300 }].map(sp => (
+            <button key={sp.ms} onClick={() => setSpeed(sp.ms)}
+              className={`h-7 px-2.5 rounded-[5px] text-[11px] num transition
+                ${speed === sp.ms ? "bg-white/[0.08] text-white" : "text-mute hover:text-white"}`}>
+              {sp.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-6 min-h-0">
+        <div className="panel rounded-xl p-5">
+          {/* Signal meta */}
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <div className="text-[10px] tracking-[0.18em] uppercase text-mute">
+                Signal {idx + 1} / {total}
+              </div>
+              <div className="text-[20px] font-semibold text-white tracking-tight mt-1 flex items-center gap-2">
+                {s.sym}
+                <span className={s.side === "BUY" ? "text-accent-green" : "text-accent-red"}>· {s.side}</span>
+                <span className="text-mute text-[14px]">· {s.tf}</span>
+              </div>
+              <div className="text-[11px] text-mute mt-1">
+                {new Date(s.time).toLocaleString()} · {s.skillset}
+              </div>
+            </div>
+            <LifecycleBadge state={s.state} />
+          </div>
+
+          {/* Level KVs */}
+          <div className="grid grid-cols-5 gap-2 mb-5">
+            <KVMini label="Entry" value={fmt(s.entry, s.digits)} color="#00d4ff" />
+            <KVMini label="SL"    value={fmt(s.sl,    s.digits)} color="#ff3d5a" />
+            <KVMini label="TP1"   value={fmt(s.tp1,   s.digits)} color="#00ff88" />
+            <KVMini label="TP2"   value={fmt(s.tp2,   s.digits)} color="#00ff88" />
+            <KVMini label="P&L"
+              value={s.pnl_r == null ? "—" : `${s.pnl_r > 0 ? "+" : ""}${s.pnl_r.toFixed(2)}R`}
+              color={pnlColor} />
+          </div>
+
+          {/* Chart */}
+          <ReplayChart signal={s} />
+
+          {/* AI reasoning */}
+          <div className="mt-4 px-3 py-2.5 rounded-md bg-white/[0.02] border border-white/[0.05]">
+            <div className="text-[9px] tracking-[0.18em] uppercase text-mute mb-1">AI Reasoning</div>
+            <div className="text-[11.5px] text-white/80 leading-relaxed">{s.why}</div>
+          </div>
+
+          {/* Playback controls */}
+          <div className="mt-5 flex items-center gap-3">
+            <button
+              onClick={() => { setIdx(0); setPlaying(false) }}
+              className="h-9 w-9 rounded-md border border-white/10 text-white hover:bg-white/[0.04] flex items-center justify-center transition"
+              title="First"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="19 20 9 12 19 4"/><line x1="5" y1="19" x2="5" y2="5"/>
+              </svg>
+            </button>
+            <button
+              onClick={() => { setIdx(i => Math.max(0, i - 1)); setPlaying(false) }}
+              className="h-9 w-9 rounded-md border border-white/10 text-white hover:bg-white/[0.04] flex items-center justify-center transition"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="15 18 9 12 15 6"/>
+              </svg>
+            </button>
+            <button
+              onClick={() => setPlaying(p => !p)}
+              className={`h-9 px-5 rounded-md text-[11px] font-bold tracking-[0.18em] transition
+                ${playing
+                  ? "bg-accent-red/15 text-accent-red border border-accent-red/30"
+                  : "bg-accent-blue/15 text-accent-blue border border-accent-blue/30"}`}
+            >
+              {playing ? "⏸ PAUSE" : "▶ PLAY"}
+            </button>
+            <button
+              onClick={() => { setIdx(i => Math.min(total - 1, i + 1)); setPlaying(false) }}
+              className="h-9 w-9 rounded-md border border-white/10 text-white hover:bg-white/[0.04] flex items-center justify-center transition"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+            </button>
+            <button
+              onClick={() => { setIdx(total - 1); setPlaying(false) }}
+              className="h-9 w-9 rounded-md border border-white/10 text-white hover:bg-white/[0.04] flex items-center justify-center transition"
+              title="Last"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="5 4 15 12 5 20"/><line x1="19" y1="5" x2="19" y2="19"/>
+              </svg>
+            </button>
+
+            <input
+              type="range" min={0} max={total - 1} value={idx}
+              onChange={e => { setIdx(+e.target.value); setPlaying(false) }}
+              className="slider flex-1"
+            />
+            <div className="text-[10px] num text-mute whitespace-nowrap">
+              {new Date(s.time).toLocaleDateString()}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

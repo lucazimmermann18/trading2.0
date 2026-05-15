@@ -1,4 +1,4 @@
-import type { Pair, OHLCBar, Signal, KnowledgeModule, Session } from "./types"
+import type { Pair, OHLCBar, Signal, KnowledgeModule, Session, HistoryEntry } from "./types"
 
 export const PAIRS_SEED: Omit<Pair, "id" | "active" | "status" | "signal" | "lastScan" | "history" | "reasoning" | "confidence" | "rsi" | "macd">[] = [
   { sym: "EUR/USD", name: "Euro / US Dollar",       group: "FX Major", px: 1.0891, digits: 5, spread: 0.6, vol: 0.00035 },
@@ -185,4 +185,93 @@ export function buildCorrelationMatrix(pairs: Pair[]): CorrelationRow[] {
     })
     return { sym: a.sym, row }
   })
+}
+
+export interface PerfRow { key: string; total: number; wins: number; losses: number; winRate: number; totalR: number }
+export interface PerfData {
+  total: number; wins: number; losses: number
+  winRate: number; totalR: number; profitFactor: number
+  expectancy: number; avgWin: number; avgLoss: number
+  equity: { r: number }[]
+  bySkillset: PerfRow[]; bySymbol: PerfRow[]
+}
+
+export function aggregatePerformance(history: HistoryEntry[]): PerfData {
+  const closed = history.filter(h => h.pnl_r != null)
+  if (!closed.length) return {
+    total:0, wins:0, losses:0, winRate:0, totalR:0,
+    profitFactor:0, expectancy:0, avgWin:0, avgLoss:0,
+    equity:[], bySkillset:[], bySymbol:[],
+  }
+  const wins   = closed.filter(h => (h.pnl_r ?? 0) > 0)
+  const losses = closed.filter(h => (h.pnl_r ?? 0) < 0)
+  const totalR = closed.reduce((s, h) => s + (h.pnl_r ?? 0), 0)
+  const grossW = wins.reduce((s, h) => s + (h.pnl_r ?? 0), 0)
+  const grossL = Math.abs(losses.reduce((s, h) => s + (h.pnl_r ?? 0), 0))
+  const avgWin  = wins.length   ? grossW / wins.length   : 0
+  const avgLoss = losses.length ? grossL / losses.length : 0
+  const winRate = closed.length ? wins.length / closed.length : 0
+
+  // running equity
+  let running = 0
+  const equity = closed.map(h => { running += h.pnl_r ?? 0; return { r: running } })
+
+  // group by skillset
+  const skillMap = new Map<string, PerfRow>()
+  const symMap   = new Map<string, PerfRow>()
+  for (const h of closed) {
+    for (const [key, map] of [[h.skillset, skillMap], [h.sym, symMap]] as const) {
+      if (!map.has(key)) map.set(key, { key, total:0, wins:0, losses:0, winRate:0, totalR:0 })
+      const r = map.get(key)!
+      r.total++
+      r.totalR += h.pnl_r ?? 0
+      if ((h.pnl_r ?? 0) > 0) { r.wins++ } else { r.losses++ }
+      r.winRate = r.wins / r.total
+    }
+  }
+
+  return {
+    total: closed.length, wins: wins.length, losses: losses.length,
+    winRate, totalR,
+    profitFactor: grossL > 0 ? grossW / grossL : grossW > 0 ? 999 : 0,
+    expectancy: winRate * avgWin - (1 - winRate) * avgLoss,
+    avgWin, avgLoss, equity,
+    bySkillset: Array.from(skillMap.values()).sort((a,b) => b.total - a.total),
+    bySymbol:   Array.from(symMap.values()).sort((a,b) => b.total - a.total),
+  }
+}
+
+export function generateHistory(pairs: Pair[], days = 14): HistoryEntry[] {
+  const out: HistoryEntry[] = []
+  const now = Date.now()
+  const skillsets = SKILLSETS
+  let id = 1
+  for (let d = days; d >= 0; d--) {
+    const count = 3 + Math.floor(Math.random() * 5)
+    for (let i = 0; i < count; i++) {
+      const p = pairs[Math.floor(Math.random() * pairs.length)]
+      const side = Math.random() > 0.5 ? "BUY" : "SELL"
+      const slDist = p.vol * (2 + Math.random() * 3)
+      const rrNum = 1.5 + Math.random() * 2.5
+      const entry = p.px * (1 + (Math.random() - 0.5) * 0.002)
+      const sl    = side === "BUY" ? entry - slDist : entry + slDist
+      const tp1   = side === "BUY" ? entry + slDist * rrNum * 0.6 : entry - slDist * rrNum * 0.6
+      const tp2   = side === "BUY" ? entry + slDist * rrNum : entry - slDist * rrNum
+      const won   = Math.random() < 0.58
+      const pnl_r = won ? rrNum * (0.6 + Math.random() * 0.8) : -(0.6 + Math.random() * 0.4)
+      const state = won ? (Math.random() > 0.4 ? "TP2" : "TP1") : "SL"
+      out.push({
+        id: id++,
+        sym: p.sym, digits: p.digits,
+        side, confidence: Math.floor(60 + Math.random() * 35),
+        entry, sl, tp1, tp2,
+        rr: rrNum.toFixed(2), tf: "H1",
+        skillset: skillsets[Math.floor(Math.random() * skillsets.length)],
+        why: `${p.sym} ${side} signal — ${won ? "target reached" : "stopped out"}.`,
+        time: now - d * 86400000 - Math.random() * 86400000,
+        state, pnl_r,
+      })
+    }
+  }
+  return out.sort((a, b) => b.time - a.time)
 }

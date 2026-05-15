@@ -42,6 +42,7 @@ export interface Signal {
 }
 
 export interface HistoryEntry {
+  id?: number
   sym: string
   digits: number
   side: "BUY" | "SELL"
@@ -55,7 +56,9 @@ export interface HistoryEntry {
   skillset: string
   why: string
   time: number
-  state: "ACTIVE" | "CLOSED" | "CANCELLED"
+  state: "ACTIVE" | "CLOSED" | "CANCELLED" | "TP1" | "TP2" | "SL"
+  pnl_r?: number
+  notes?: string
 }
 
 export interface KnowledgeModule {

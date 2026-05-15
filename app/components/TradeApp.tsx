@@ -9,10 +9,14 @@ import Toast from "./panels/Toast"
 import SettingsModal from "./panels/SettingsModal"
 import MultiChartView from "./views/MultiChartView"
 import HeatmapView from "./views/HeatmapView"
+import PerformanceView from "./views/PerformanceView"
+import JournalView from "./views/JournalView"
+import ReplayView from "./views/ReplayView"
+import SystemView from "./views/SystemView"
 import type { Pair, HistoryEntry, KnowledgeModule, ViewId, Timeframe } from "@/app/lib/types"
 import {
   buildInitialState, tickPair, makeSignal, KNOWLEDGE,
-  activeSessions, pick, fmt,
+  activeSessions, pick, fmt, generateHistory,
 } from "@/app/lib/market-data"
 import { useAISettings } from "@/app/hooks/useAISettings"
 
@@ -43,13 +47,20 @@ export default function TradeApp() {
   const seededRef = useRef(false)
   const aiSettings = useAISettings()
 
-  useEffect(() => { setPairs(buildInitialState()) }, [])
+  // Build initial pairs + seed 14-day history
+  useEffect(() => {
+    const initialPairs = buildInitialState()
+    setPairs(initialPairs)
+    setHistory(generateHistory(initialPairs, 14))
+  }, [])
 
+  // Live price ticking
   useEffect(() => {
     const i = setInterval(() => setPairs(prev => prev.map(tickPair)), 800)
     return () => clearInterval(i)
   }, [])
 
+  // Scanner countdown + session refresh
   useEffect(() => {
     const i = setInterval(() => {
       setSecondsLeft(s => scannerOn ? (s > 0 ? s - 1 : 300) : s)
@@ -64,9 +75,8 @@ export default function TradeApp() {
     const useAI = settings.useAI && !!settings.apiKeys[settings.activeProvider]
 
     if (useAI) {
-      // AI-powered scan: call each active pair sequentially against the AI provider
       const activePairs = pairs.filter(p => p.active)
-      const results: Map<number, NonNullable<Pair["signal"]> | null> = new Map()
+      const results = new Map<number, NonNullable<Pair["signal"]> | null>()
 
       await Promise.allSettled(
         activePairs.map(async p => {
@@ -107,7 +117,7 @@ export default function TradeApp() {
         const sig = results.get(p.id)
         if (sig) {
           setToast({ pair: p, signal: sig })
-          setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 80))
+          setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 200))
           setUnread(u => u + 1)
           return { ...p, status: "TRADE" as const, signal: sig, lastScan: Date.now(), confidence: sig.confidence }
         }
@@ -139,7 +149,7 @@ export default function TradeApp() {
               const sig = makeSignal(p, skillset)
               if (sig.confidence >= threshold) {
                 setToast({ pair: p, signal: sig })
-                setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 80))
+                setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 200))
                 setUnread(u => u + 1)
                 return { ...p, status: "TRADE" as const, signal: sig, lastScan: Date.now(), confidence: sig.confidence }
               }
@@ -166,6 +176,7 @@ export default function TradeApp() {
     if (secondsLeft === 0 && scannerOn) runScan()
   }, [secondsLeft, scannerOn, runScan])
 
+  // Seed XAU/USD signal on first load
   useEffect(() => {
     if (seededRef.current || pairs.length === 0) return
     seededRef.current = true
@@ -205,7 +216,7 @@ export default function TradeApp() {
     </div>
   )
 
-  const isFullView = view === "multichart" || view === "heatmap" || view === "performance" || view === "journal" || view === "replay" || view === "system"
+  const isFullView = view !== "dashboard"
 
   return (
     <div className="flex flex-col h-screen bg-ink-950 overflow-hidden">
@@ -220,7 +231,10 @@ export default function TradeApp() {
       <div className="flex flex-1 min-h-0">
         <NavRail
           view={view}
-          setView={v => { setView(v); if (v === "journal") setUnread(0) }}
+          setView={v => {
+            setView(v)
+            if (v === "journal" || v === "performance") setUnread(0)
+          }}
           badges={{ journal: unread }}
         />
 
@@ -234,6 +248,7 @@ export default function TradeApp() {
           scannerOn={scannerOn}
         />
 
+        {/* Main content area */}
         {view === "dashboard" && (
           <>
             <ChartPanel pair={selected} timeframe={timeframe} setTimeframe={setTimeframe} />
@@ -251,24 +266,21 @@ export default function TradeApp() {
           </>
         )}
 
-        {view === "multichart" && (
-          <MultiChartView pairs={pairs} onOpen={handleOpenPair} />
-        )}
-
-        {view === "heatmap" && (
-          <HeatmapView pairs={pairs} />
-        )}
-
-        {(view === "performance" || view === "journal" || view === "replay" || view === "system") && (
-          <ComingSoon view={view} />
-        )}
+        {view === "multichart"   && <MultiChartView pairs={pairs} onOpen={handleOpenPair} />}
+        {view === "heatmap"      && <HeatmapView pairs={pairs} />}
+        {view === "performance"  && <PerformanceView history={history} />}
+        {view === "journal"      && <JournalView history={history} />}
+        {view === "replay"       && <ReplayView history={history} />}
+        {view === "system"       && <SystemView />}
       </div>
 
       <Toast
         signal={toast?.signal ?? null}
         pair={toast?.pair ?? null}
         onDismiss={() => setToast(null)}
-        onView={() => { if (toast) { setSelectedId(toast.pair.id); setView("dashboard"); setToast(null) } }}
+        onView={() => {
+          if (toast) { setSelectedId(toast.pair.id); setView("dashboard"); setToast(null) }
+        }}
       />
 
       <SettingsModal
@@ -282,24 +294,6 @@ export default function TradeApp() {
         setThreshold={setThreshold}
         aiSettings={aiSettings}
       />
-    </div>
-  )
-}
-
-function ComingSoon({ view }: { view: ViewId }) {
-  const labels: Record<string, string> = {
-    performance: "Performance",
-    journal: "Signal Journal",
-    replay: "Chart Replay",
-    system: "System Status",
-  }
-  return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-4 text-mute">
-      <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" strokeWidth="1" opacity="0.3">
-        <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
-      </svg>
-      <div className="text-[15px] text-white/50 font-medium">{labels[view]}</div>
-      <div className="text-[12px]">Coming soon — next in development queue</div>
     </div>
   )
 }
