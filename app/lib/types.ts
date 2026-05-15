@@ -77,3 +77,20 @@ export interface Session {
 
 export type ViewId = "dashboard" | "multichart" | "heatmap" | "performance" | "journal" | "replay" | "system"
 export type Timeframe = "M1" | "M5" | "M15" | "H1" | "H4" | "D1"
+
+export type AuditKind = "scan" | "signal" | "zone" | "tp" | "sl" | "config" | "ai" | "feed"
+
+export interface AuditEntry {
+  id: number
+  time: number
+  kind: AuditKind
+  msg: string
+}
+
+export interface SystemMetrics {
+  scanCount: number
+  signalCount: number
+  tpCount: number
+  slCount: number
+  lastAILatency: number
+}

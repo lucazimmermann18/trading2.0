@@ -1,43 +1,26 @@
 "use client"
-import { useMemo, useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
+import type { AuditEntry, SystemMetrics } from "@/app/lib/types"
 
-interface FeedStatus { name: string; status: "ok" | "stale" | "error"; latency: number; msgsPerMin: number; note?: string }
-interface AuditEvent { id: number; time: number; kind: string; msg: string }
-
-const AUDIT_COLORS: Record<string, string> = {
-  scan:    "bg-accent-blue/15 text-accent-blue",
-  signal:  "bg-accent-green/15 text-accent-green",
-  notif:   "bg-accent-violet/20 text-accent-violet",
-  tp:      "bg-accent-green/15 text-accent-green",
-  sl:      "bg-accent-red/15 text-accent-red",
-  config:  "bg-white/[0.05] text-white/70",
-  ai:      "bg-accent-violet/15 text-accent-violet",
-  feed:    "bg-white/[0.05] text-white/70",
+interface Props {
+  auditLog: AuditEntry[]
+  metrics: SystemMetrics
+  wsConnected: boolean
+  activePairs: number
+  totalPairs: number
+  aiEnabled: boolean
+  aiProvider: string
 }
 
-function buildAuditLog(): AuditEvent[] {
-  const events = [
-    { kind: "scan",   msgs: ["Scan cycle complete — 14 pairs analyzed", "AI scan started", "Scan skipped — scanner paused"] },
-    { kind: "signal", msgs: ["XAU/USD SELL signal generated · conf 82%", "EUR/USD BUY signal above threshold", "GBP/USD signal below threshold — skipped"] },
-    { kind: "tp",     msgs: ["XAU/USD TP1 reached +1.2R", "BTC/USD TP2 hit +3.1R"] },
-    { kind: "sl",     msgs: ["USD/JPY stopped out −1R", "ETH/USD SL triggered −0.8R"] },
-    { kind: "ai",     msgs: ["Anthropic Claude API call · 340ms", "Model response parsed OK", "Token usage: 1,240 input / 186 output"] },
-    { kind: "feed",   msgs: ["Twelve Data price feed updated", "WebSocket reconnected", "Feed latency spike detected — 420ms"] },
-    { kind: "config", msgs: ["Threshold updated to 75%", "Skillset changed: Smart Money Concepts", "Pair EUR/USD disabled"] },
-  ]
-  const out: AuditEvent[] = []
-  const now = Date.now()
-  for (let i = 0; i < 60; i++) {
-    const ev = events[Math.floor(Math.random() * events.length)]
-    const msgs = ev.msgs
-    out.push({
-      id: i,
-      time: now - (59 - i) * 90000 - Math.random() * 60000,
-      kind: ev.kind,
-      msg: msgs[Math.floor(Math.random() * msgs.length)],
-    })
-  }
-  return out.sort((a, b) => b.time - a.time)
+const AUDIT_STYLES: Record<string, string> = {
+  scan:   "bg-accent-blue/15 text-accent-blue",
+  signal: "bg-accent-green/15 text-accent-green",
+  zone:   "bg-accent-violet/15 text-accent-violet",
+  tp:     "bg-accent-green/15 text-accent-green",
+  sl:     "bg-accent-red/15 text-accent-red",
+  config: "bg-white/[0.05] text-white/70",
+  ai:     "bg-accent-violet/15 text-accent-violet",
+  feed:   "bg-white/[0.05] text-white/70",
 }
 
 function StatCard({ label, value, sub, accent = "#ffffff" }: {
@@ -61,35 +44,64 @@ function KVRow({ k, v }: { k: string; v: string | number }) {
   )
 }
 
-export default function SystemView() {
+export default function SystemView({ auditLog, metrics, wsConnected, activePairs, totalPairs, aiEnabled, aiProvider }: Props) {
   const [tick, setTick] = useState(0)
-  const [startTime] = useState(() => Date.now() - 14 * 3600000 - 1800000)
-  const [audit] = useState<AuditEvent[]>(() => buildAuditLog())
+  const [mountTime] = useState(() => Date.now())
 
   useEffect(() => {
     const i = setInterval(() => setTick(t => t + 1), 3000)
     return () => clearInterval(i)
   }, [])
 
-  const uptime = 99.7
-  const upHours = Math.floor((Date.now() - startTime) / 3600000)
-  const scansToday = 288 + Math.floor(tick * 0.3)
-  const latency = 280 + Math.floor(Math.sin(tick * 0.7) * 80)
+  const uptime = useMemo(() => {
+    const elapsed = Date.now() - mountTime
+    const h = Math.floor(elapsed / 3600000)
+    const m = Math.floor((elapsed % 3600000) / 60000)
+    return `${h}h ${m}m`
+  }, [tick, mountTime]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const feeds: FeedStatus[] = useMemo(() => [
-    { name: "Twelve Data",  status: "ok",    latency: 38 + Math.floor(Math.sin(tick) * 12), msgsPerMin: 840 },
-    { name: "Price Ticker", status: "ok",    latency: 12 + Math.floor(Math.cos(tick) * 5),  msgsPerMin: 1680 },
-    { name: "OANDA REST",   status: "stale", latency: 0,   msgsPerMin: 0,   note: "API key not configured" },
-    { name: "MetaApi",      status: "error", latency: 0,   msgsPerMin: 0,   note: "Connection refused" },
-    { name: "CoinGecko",    status: "ok",    latency: 94,  msgsPerMin: 60 },
-  ], [tick])
+  const latencyDisplay = metrics.lastAILatency > 0
+    ? `${metrics.lastAILatency}ms`
+    : "—"
 
-  const notifChannels = [
-    { name: "Telegram",  status: "off",  delivered: 0,  failed: 0 },
-    { name: "Webhook",   status: "off",  delivered: 0,  failed: 0 },
-    { name: "Email",     status: "off",  delivered: 0,  failed: 0 },
-    { name: "Discord",   status: "off",  delivered: 0,  failed: 0 },
+  const winRate = metrics.tpCount + metrics.slCount > 0
+    ? Math.round((metrics.tpCount / (metrics.tpCount + metrics.slCount)) * 100)
+    : null
+
+  const feeds = [
+    {
+      name: "Twelve Data WS",
+      status: (wsConnected ? "ok" : "error") as "ok" | "stale" | "error",
+      latency: wsConnected ? 28 + Math.floor(Math.sin(tick) * 8) : 0,
+      msgsPerMin: wsConnected ? activePairs * 75 : 0,
+      note: wsConnected ? undefined : "Reconnecting…",
+    },
+    {
+      name: "Price Simulator",
+      status: "ok" as const,
+      latency: 0,
+      msgsPerMin: activePairs * 75,
+      note: "800ms tick · always live",
+    },
+    {
+      name: `AI — ${aiProvider}`,
+      status: (aiEnabled ? "ok" : "stale") as "ok" | "stale" | "error",
+      latency: metrics.lastAILatency || 0,
+      msgsPerMin: 0,
+      note: aiEnabled ? `Last call ${metrics.lastAILatency ? metrics.lastAILatency + "ms" : "—"}` : "API key not configured",
+    },
+    {
+      name: "OANDA REST",
+      status: "stale" as const,
+      latency: 0,
+      msgsPerMin: 0,
+      note: "API key not configured",
+    },
   ]
+
+  const allOk = wsConnected && aiEnabled
+  const statusLabel = allOk ? "ALL SYSTEMS OPERATIONAL" : wsConnected ? "AI NOT CONFIGURED" : "FEED DISCONNECTED"
+  const statusColor = allOk ? "#00ff88" : wsConnected ? "#ffb800" : "#ff3d5a"
 
   return (
     <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
@@ -103,28 +115,26 @@ export default function SystemView() {
           </div>
           <div>
             <div className="text-[18px] font-semibold text-white tracking-tight">System Status</div>
-            <div className="text-[11px] text-mute mt-0.5">
-              Real-time health of the scanner backbone — every component, every feed
-            </div>
+            <div className="text-[11px] text-mute mt-0.5">Live health of the scanner — every component, every event</div>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 text-[10px] text-accent-green">
-          <span className="dot bg-accent-green animate-pulseDot" style={{ boxShadow: "0 0 6px rgba(0,255,136,0.8)" }} />
-          ALL SYSTEMS OPERATIONAL
+        <div className="flex items-center gap-1.5 text-[10px]" style={{ color: statusColor }}>
+          <span className="dot animate-pulseDot" style={{ background: statusColor, boxShadow: `0 0 6px ${statusColor}` }} />
+          {statusLabel}
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-5 min-h-0">
         {/* KPI row */}
         <div className="grid grid-cols-4 gap-3">
-          <StatCard label="Scanner Uptime" value={`${uptime}%`}
-            sub={`${upHours}h online · auto-restart enabled`} accent="#00ff88" />
-          <StatCard label="Scans Today" value={scansToday}
-            sub="5-min interval · 288 expected/day" accent="#00d4ff" />
-          <StatCard label="AI Latency p50" value={`${latency}ms`}
-            sub="Last model call round-trip" accent="#a78bfa" />
-          <StatCard label="Active Pairs" value="8 / 14"
-            sub="Monitored pairs · 24/7 scanning" />
+          <StatCard label="Session Uptime"    value={uptime}
+            sub="Since page load · auto-scanning" accent="#00ff88" />
+          <StatCard label="Scans Run"          value={metrics.scanCount}
+            sub={`${metrics.signalCount} signal${metrics.signalCount !== 1 ? "s" : ""} generated`} accent="#00d4ff" />
+          <StatCard label="Last AI Latency"    value={latencyDisplay}
+            sub={`Provider: ${aiProvider}`} accent="#a78bfa" />
+          <StatCard label="Active Pairs"        value={`${activePairs} / ${totalPairs}`}
+            sub={winRate !== null ? `Win rate: ${winRate}% · ${metrics.tpCount}TP / ${metrics.slCount}SL` : "Monitoring 24/7"} />
         </div>
 
         {/* Data feeds */}
@@ -134,18 +144,17 @@ export default function SystemView() {
             {feeds.map(f => {
               const dotCol = f.status === "ok" ? "#00ff88" : f.status === "stale" ? "#ffb800" : "#ff3d5a"
               const statusLabel = f.status === "ok" ? "● LIVE" : f.status === "stale" ? "◐ STALE" : "○ OFFLINE"
-              const statusColor = f.status === "ok" ? "#00ff88" : f.status === "stale" ? "#ffb800" : "#ff3d5a"
               return (
                 <div key={f.name} className="flex items-center gap-3 px-3 h-11 rounded-md bg-white/[0.02]">
                   <span className="w-2 h-2 rounded-full shrink-0"
                     style={{ background: dotCol, boxShadow: f.status === "ok" ? `0 0 6px ${dotCol}` : "" }} />
-                  <div className="w-[110px] text-[12px] text-white font-medium shrink-0">{f.name}</div>
+                  <div className="w-[130px] text-[12px] text-white font-medium shrink-0">{f.name}</div>
                   <div className="flex-1 flex items-center gap-4 text-[10.5px] text-mute num">
                     {f.latency > 0 && <span className="w-16">{f.latency}ms</span>}
-                    {f.msgsPerMin > 0 && <span>{f.msgsPerMin.toLocaleString()} msg/min</span>}
-                    {f.note && <span className="italic text-mute/70">{f.note}</span>}
+                    {f.msgsPerMin > 0 && <span>{f.msgsPerMin} msg/min</span>}
+                    {f.note && <span className="italic">{f.note}</span>}
                   </div>
-                  <div className="text-[10px] font-bold tracking-[0.14em]" style={{ color: statusColor }}>
+                  <div className="text-[10px] font-bold tracking-[0.14em]" style={{ color: dotCol }}>
                     {statusLabel}
                   </div>
                 </div>
@@ -155,19 +164,16 @@ export default function SystemView() {
         </div>
 
         <div className="grid grid-cols-2 gap-4">
-          {/* Notification channels */}
+          {/* Signal stats */}
           <div className="panel rounded-lg p-4">
-            <div className="text-[11px] tracking-[0.18em] uppercase text-mute mb-3">Notification Channels</div>
-            <div className="space-y-2">
-              {notifChannels.map(n => (
-                <div key={n.name} className="flex items-center justify-between px-3 h-10 rounded-md bg-white/[0.02]">
-                  <div className="flex items-center gap-2.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-mute/50" />
-                    <div className="text-[12px] text-white">{n.name}</div>
-                  </div>
-                  <div className="text-[10px] text-mute">not configured</div>
-                </div>
-              ))}
+            <div className="text-[11px] tracking-[0.18em] uppercase text-mute mb-3">Signal Stats</div>
+            <div className="space-y-1.5">
+              <KVRow k="Scans run"       v={metrics.scanCount} />
+              <KVRow k="Signals found"   v={metrics.signalCount} />
+              <KVRow k="TP hits"         v={metrics.tpCount} />
+              <KVRow k="SL hits"         v={metrics.slCount} />
+              <KVRow k="Win rate"        v={winRate !== null ? `${winRate}%` : "—"} />
+              <KVRow k="AI latency"      v={latencyDisplay} />
             </div>
           </div>
 
@@ -177,10 +183,10 @@ export default function SystemView() {
             <div className="space-y-1.5">
               <KVRow k="Framework"    v="Next.js 14" />
               <KVRow k="Runtime"      v="Edge / Node.js" />
-              <KVRow k="Scan Engine"  v="Built-in + AI" />
+              <KVRow k="Scan Engine"  v="Confluence + AI" />
               <KVRow k="Chart Lib"    v="lightweight-charts v5" />
               <KVRow k="Price API"    v="Twelve Data" />
-              <KVRow k="Uptime"       v={`${upHours}h ${Math.floor((Date.now() - startTime) % 3600000 / 60000)}m`} />
+              <KVRow k="Session up"   v={uptime} />
             </div>
           </div>
         </div>
@@ -188,23 +194,28 @@ export default function SystemView() {
         {/* Audit log */}
         <div className="panel rounded-lg p-4">
           <div className="flex items-center justify-between mb-3">
-            <div className="text-[11px] tracking-[0.18em] uppercase text-mute">Audit Log</div>
-            <div className="text-[10px] text-mute">last 60 events</div>
+            <div className="text-[11px] tracking-[0.18em] uppercase text-mute">Live Audit Log</div>
+            <div className="text-[10px] text-mute">{auditLog.length} event{auditLog.length !== 1 ? "s" : ""} this session</div>
           </div>
-          <div className="space-y-0.5 max-h-[280px] overflow-y-auto">
-            {audit.map(e => (
-              <div key={e.id}
-                className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-white/[0.02] transition">
-                <span className="num text-mute text-[10px] w-[76px] shrink-0">
-                  {new Date(e.time).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                </span>
-                <span className={`text-[9.5px] font-bold tracking-[0.12em] uppercase px-1.5 py-0.5 rounded-[3px] shrink-0 ${AUDIT_COLORS[e.kind] ?? "bg-white/5 text-mute"}`}>
-                  {e.kind}
-                </span>
-                <span className="text-[11.5px] text-white/75 truncate">{e.msg}</span>
-              </div>
-            ))}
-          </div>
+          {auditLog.length === 0 ? (
+            <div className="flex items-center justify-center h-16 text-mute text-[12px] italic">
+              Waiting for app events — run a scan to start logging
+            </div>
+          ) : (
+            <div className="space-y-0.5 max-h-[320px] overflow-y-auto">
+              {auditLog.map(e => (
+                <div key={e.id} className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-white/[0.02] transition">
+                  <span className="num text-mute text-[10px] w-[76px] shrink-0">
+                    {new Date(e.time).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                  </span>
+                  <span className={`text-[9.5px] font-bold tracking-[0.12em] uppercase px-1.5 py-0.5 rounded-[3px] shrink-0 ${AUDIT_STYLES[e.kind] ?? "bg-white/5 text-mute"}`}>
+                    {e.kind}
+                  </span>
+                  <span className="text-[11.5px] text-white/75 truncate">{e.msg}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
