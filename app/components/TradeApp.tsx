@@ -17,7 +17,7 @@ import SystemView from "./views/SystemView"
 import type { Pair, HistoryEntry, KnowledgeModule, ViewId, Timeframe } from "@/app/lib/types"
 import {
   buildInitialState, tickPair, makeSignal, KNOWLEDGE,
-  activeSessions, pick, fmt, generateHistory,
+  activeSessions, pick, fmt, generateHistory, buildMarketContext,
 } from "@/app/lib/market-data"
 import { useAISettings } from "@/app/hooks/useAISettings"
 import { useTwelveDataWS } from "@/app/hooks/useTwelveDataWS"
@@ -128,6 +128,7 @@ export default function TradeApp() {
       await Promise.allSettled(
         activePairs.map(async p => {
           try {
+            const ctx = buildMarketContext(p)
             const res = await fetch("/api/ai/analyze", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -135,10 +136,19 @@ export default function TradeApp() {
                 provider: settings.activeProvider,
                 model: settings.selectedModels[settings.activeProvider],
                 apiKey: settings.apiKeys[settings.activeProvider],
-                sym: p.sym, px: p.px, digits: p.digits,
-                rsi: p.rsi, macd: p.macd, spread: p.spread,
-                history: p.history.slice(-20),
-                skillset,
+                sym: p.sym, px: p.px, digits: p.digits, spread: p.spread,
+                history: p.history.slice(-50),
+                skillset, timeframe,
+                // enriched technical context
+                rsi: ctx.rsi,
+                macdLine: ctx.macdLine,
+                signalLine: ctx.signalLine,
+                histogram: ctx.histogram,
+                bb: ctx.bb,
+                trend: ctx.trend,
+                support: ctx.swings.support,
+                resistance: ctx.swings.resistance,
+                activeSessions: ctx.activeSessions,
               }),
             })
             if (!res.ok) { results.set(p.id, null); return }
@@ -183,39 +193,26 @@ export default function TradeApp() {
       }))
       setScanning(false)
     } else {
-      // Simulated scan
+      // Confluence-based simulated scan — evaluate every active pair
       setTimeout(() => {
-        setPairs(prev => {
-          const active = prev.filter(p => p.active)
-          const dice = Math.random()
-          const winners = dice < 0.55 ? 1 : dice < 0.85 ? 0 : 2
-          const chosen = [...active].sort(() => Math.random() - 0.5).slice(0, winners).map(p => p.id)
-          return prev.map(p => {
-            if (!p.active) return p
-            const got = chosen.includes(p.id)
-            if (got) {
-              const sig = makeSignal(p, skillset)
-              if (sig.confidence >= threshold) {
-                setToast({ pair: p, signal: sig })
-                setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 200))
-                setUnread(u => u + 1)
-                notifSettings.sendSignal({ ...sig, sym: p.sym, digits: p.digits })
-                return { ...p, status: "TRADE" as const, signal: sig, lastScan: Date.now(), confidence: sig.confidence }
-              }
-            }
-            return {
-              ...p, status: "NO TRADE" as const, signal: null, lastScan: Date.now(),
-              confidence: Math.floor(15 + Math.random() * 50),
-              reasoning: pick(REASONING_NO_TRADE)
-                .replace("{sym}", p.sym)
-                .replace("{h}", fmt(p.px + p.vol * 3, p.digits))
-                .replace("{l}", fmt(p.px - p.vol * 3, p.digits))
-                .replace("{entry}", fmt(p.px, p.digits)),
-              rsi: 30 + Math.random() * 40,
-              macd: (Math.random() - 0.5) * 0.5,
-            }
-          })
-        })
+        setPairs(prev => prev.map(p => {
+          if (!p.active) return p
+          const sig = makeSignal(p, skillset)
+          if (sig.confidence >= threshold) {
+            setToast({ pair: p, signal: sig })
+            setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 200))
+            setUnread(u => u + 1)
+            notifSettings.sendSignal({ ...sig, sym: p.sym, digits: p.digits })
+            return { ...p, status: "TRADE" as const, signal: sig, lastScan: Date.now(), confidence: sig.confidence }
+          }
+          return {
+            ...p, status: "NO TRADE" as const, signal: null, lastScan: Date.now(),
+            confidence: sig.confidence,
+            reasoning: sig.why,
+            rsi: p.rsi + (Math.random() - 0.5) * 2,
+            macd: p.macd + (Math.random() - 0.5) * 0.01,
+          }
+        }))
         setScanning(false)
       }, 1700)
     }

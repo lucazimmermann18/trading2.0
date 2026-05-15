@@ -47,13 +47,6 @@ const REASONING_NO_TRADE = [
   "{sym} chopping under {h}. Order flow neutral, RSI flat, no edge.",
 ]
 
-const REASONING_TRADE = [
-  "{sym} swept liquidity above {h} then printed bearish BOS at {entry}. Retest of breaker active — sell on confirmation.",
-  "{sym} bullish FVG at {entry} aligned with London open momentum. SMC + session confluence.",
-  "{sym} range expansion off {l} support with rising RSI divergence. Breakout long active.",
-  "{sym} broke {h} with volume spike. Pullback to OB at {entry} expected — high-prob long.",
-  "{sym} M5 micro-structure shifted, mitigated demand at {entry}. Scalp long with tight invalidation.",
-]
 
 export function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]
@@ -61,6 +54,109 @@ export function pick<T>(arr: T[]): T {
 
 export function fmt(px: number, digits: number): string {
   return px.toFixed(digits)
+}
+
+// ── Technical Indicator Calculations ───────────────────────────
+
+export function calcEMA(values: number[], period: number): number[] {
+  const k = 2 / (period + 1)
+  const ema: number[] = []
+  let e = values[0] ?? 0
+  for (const v of values) {
+    e = v * k + e * (1 - k)
+    ema.push(e)
+  }
+  return ema
+}
+
+export function calcRSI(closes: number[], period = 14): number {
+  if (closes.length < period + 1) return 50
+  let gains = 0, losses = 0
+  for (let i = 1; i <= period; i++) {
+    const d = closes[i] - closes[i - 1]
+    if (d > 0) gains += d; else losses -= d
+  }
+  let ag = gains / period, al = losses / period
+  for (let i = period + 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1]
+    const g = d > 0 ? d : 0, l = d < 0 ? -d : 0
+    ag = (ag * (period - 1) + g) / period
+    al = (al * (period - 1) + l) / period
+  }
+  return al === 0 ? 100 : 100 - 100 / (1 + ag / al)
+}
+
+export function calcMACD(closes: number[]): { macdLine: number; signalLine: number; histogram: number } {
+  if (closes.length < 26) return { macdLine: 0, signalLine: 0, histogram: 0 }
+  const ema12 = calcEMA(closes, 12)
+  const ema26 = calcEMA(closes, 26)
+  const macdSeries = ema12.map((v, i) => v - ema26[i])
+  const signalSeries = calcEMA(macdSeries, 9)
+  const last = macdSeries.length - 1
+  const macdLine = macdSeries[last]
+  const signalLine = signalSeries[last]
+  return { macdLine, signalLine, histogram: macdLine - signalLine }
+}
+
+export function calcBB(closes: number[], period = 20, mult = 2): { upper: number; mid: number; lower: number } {
+  const recent = closes.slice(-period)
+  if (recent.length < 2) return { upper: closes[0] ?? 0, mid: closes[0] ?? 0, lower: closes[0] ?? 0 }
+  const mid = recent.reduce((s, v) => s + v, 0) / recent.length
+  const std = Math.sqrt(recent.reduce((s, v) => s + (v - mid) ** 2, 0) / recent.length)
+  return { upper: mid + mult * std, mid, lower: mid - mult * std }
+}
+
+export function calcTrend(closes: number[]): "UP" | "DOWN" | "NEUTRAL" {
+  if (closes.length < 50) return "NEUTRAL"
+  const ema20 = calcEMA(closes, 20)
+  const ema50 = calcEMA(closes, 50)
+  const diff = ema20[ema20.length - 1] - ema50[ema50.length - 1]
+  const threshold = closes[closes.length - 1] * 0.0002
+  if (diff > threshold) return "UP"
+  if (diff < -threshold) return "DOWN"
+  return "NEUTRAL"
+}
+
+export interface SwingLevels { support: number[]; resistance: number[] }
+
+export function calcSwingLevels(bars: OHLCBar[], lookback = 5): SwingLevels {
+  const support: number[] = []
+  const resistance: number[] = []
+  for (let i = lookback; i < bars.length - lookback; i++) {
+    const isSwingHigh = bars.slice(i - lookback, i).every(b => b.high <= bars[i].high) &&
+                        bars.slice(i + 1, i + lookback + 1).every(b => b.high <= bars[i].high)
+    const isSwingLow  = bars.slice(i - lookback, i).every(b => b.low >= bars[i].low) &&
+                        bars.slice(i + 1, i + lookback + 1).every(b => b.low >= bars[i].low)
+    if (isSwingHigh) resistance.push(bars[i].high)
+    if (isSwingLow)  support.push(bars[i].low)
+  }
+  const px = bars[bars.length - 1]?.close ?? 0
+  return {
+    support:    support.filter(l => l < px).sort((a, b) => b - a).slice(0, 4),
+    resistance: resistance.filter(l => l > px).sort((a, b) => a - b).slice(0, 4),
+  }
+}
+
+export interface MarketContext {
+  rsi: number
+  macdLine: number
+  signalLine: number
+  histogram: number
+  bb: { upper: number; mid: number; lower: number }
+  trend: "UP" | "DOWN" | "NEUTRAL"
+  swings: SwingLevels
+  activeSessions: string[]
+}
+
+export function buildMarketContext(p: Pair): MarketContext {
+  const closes = p.history.map(b => b.close)
+  const rsi = calcRSI(closes)
+  const { macdLine, signalLine, histogram } = calcMACD(closes)
+  const bb = calcBB(closes)
+  const trend = calcTrend(closes)
+  const swings = calcSwingLevels(p.history)
+  const sessions = activeSessions().filter(s => s.active).map(s => s.label)
+  return { rsi, macdLine, signalLine, histogram, bb, trend, swings, activeSessions: sessions }
 }
 
 function seedHistory(px: number, vol: number, n = 220): OHLCBar[] {
@@ -81,23 +177,29 @@ function seedHistory(px: number, vol: number, n = 220): OHLCBar[] {
 }
 
 export function buildInitialState(): Pair[] {
-  return PAIRS_SEED.map((p, i) => ({
-    id: i,
-    ...p,
-    active: i < 8,
-    status: "NO TRADE" as const,
-    signal: null,
-    lastScan: Date.now() - Math.floor(Math.random() * 240000),
-    history: seedHistory(p.px, p.vol),
-    reasoning: pick(REASONING_NO_TRADE)
-      .replace("{sym}", p.sym)
-      .replace("{h}", fmt(p.px + p.vol * 3, p.digits))
-      .replace("{l}", fmt(p.px - p.vol * 3, p.digits))
-      .replace("{entry}", fmt(p.px, p.digits)),
-    confidence: Math.floor(15 + Math.random() * 50),
-    rsi: 30 + Math.random() * 40,
-    macd: (Math.random() - 0.5) * 0.5,
-  }))
+  return PAIRS_SEED.map((p, i) => {
+    const history = seedHistory(p.px, p.vol)
+    const closes = history.map(b => b.close)
+    const rsi = calcRSI(closes)
+    const { macdLine } = calcMACD(closes)
+    return {
+      id: i,
+      ...p,
+      active: i < 8,
+      status: "NO TRADE" as const,
+      signal: null,
+      lastScan: Date.now() - Math.floor(Math.random() * 240000),
+      history,
+      reasoning: pick(REASONING_NO_TRADE)
+        .replace("{sym}", p.sym)
+        .replace("{h}", fmt(p.px + p.vol * 3, p.digits))
+        .replace("{l}", fmt(p.px - p.vol * 3, p.digits))
+        .replace("{entry}", fmt(p.px, p.digits)),
+      confidence: Math.floor(15 + Math.random() * 50),
+      rsi,
+      macd: macdLine,
+    }
+  })
 }
 
 export function tickPair(p: Pair): Pair {
@@ -124,20 +226,93 @@ export function tickPair(p: Pair): Pair {
 }
 
 export function makeSignal(p: Pair, skillset: string): Signal {
-  const side = Math.random() > 0.5 ? "BUY" : "SELL"
-  const confidence = Math.floor(60 + Math.random() * 35)
-  const rrNum = 1.5 + Math.random() * 2.5
-  const slDist = p.vol * (2 + Math.random() * 3)
+  const ctx = buildMarketContext(p)
+  const { rsi, macdLine, signalLine, histogram, bb, trend, swings } = ctx
+
+  // Count bullish vs bearish confluences
+  let bullScore = 0, bearScore = 0
+  const bullReasons: string[] = []
+  const bearReasons: string[] = []
+
+  // RSI zones
+  if (rsi < 32) { bullScore += 2; bullReasons.push(`RSI oversold (${rsi.toFixed(1)})`) }
+  else if (rsi < 42) { bullScore += 1; bullReasons.push(`RSI bearish but recovering (${rsi.toFixed(1)})`) }
+  if (rsi > 68) { bearScore += 2; bearReasons.push(`RSI overbought (${rsi.toFixed(1)})`) }
+  else if (rsi > 58) { bearScore += 1; bearReasons.push(`RSI elevated (${rsi.toFixed(1)})`) }
+
+  // MACD crossover/direction
+  if (macdLine > signalLine && histogram > 0) { bullScore += 2; bullReasons.push("MACD bullish crossover") }
+  else if (macdLine > 0) { bullScore += 1; bullReasons.push("MACD above zero") }
+  if (macdLine < signalLine && histogram < 0) { bearScore += 2; bearReasons.push("MACD bearish crossover") }
+  else if (macdLine < 0) { bearScore += 1; bearReasons.push("MACD below zero") }
+
+  // Bollinger Band position
+  const bbWidth = bb.upper - bb.lower
+  if (bbWidth > 0) {
+    const pos = (p.px - bb.lower) / bbWidth
+    if (pos < 0.15) { bullScore += 2; bullReasons.push(`Price at lower BB (${fmt(bb.lower, p.digits)})`) }
+    else if (pos < 0.30) { bullScore += 1; bullReasons.push("Price near lower BB") }
+    if (pos > 0.85) { bearScore += 2; bearReasons.push(`Price at upper BB (${fmt(bb.upper, p.digits)})`) }
+    else if (pos > 0.70) { bearScore += 1; bearReasons.push("Price near upper BB") }
+  }
+
+  // Trend alignment
+  if (trend === "UP") { bullScore += 2; bullReasons.push("EMA20 > EMA50 (uptrend)") }
+  if (trend === "DOWN") { bearScore += 2; bearReasons.push("EMA20 < EMA50 (downtrend)") }
+
+  // Key level proximity (within 0.25% of price)
+  const proximity = p.px * 0.0025
+  if (swings.support.length > 0 && Math.abs(p.px - swings.support[0]) < proximity) {
+    bullScore += 2
+    bullReasons.push(`Support at ${fmt(swings.support[0], p.digits)}`)
+  }
+  if (swings.resistance.length > 0 && Math.abs(p.px - swings.resistance[0]) < proximity) {
+    bearScore += 2
+    bearReasons.push(`Resistance at ${fmt(swings.resistance[0], p.digits)}`)
+  }
+
+  // Session quality boost (overlap = better liquidity)
+  const sessionCount = ctx.activeSessions.length
+  if (sessionCount >= 2) {
+    bullScore += 1; bearScore += 1
+  }
+
+  // Require minimum score to generate signal
+  const maxScore = Math.max(bullScore, bearScore)
+  if (maxScore < 3) {
+    // Not enough confluence — return a low-confidence dummy signal that gets filtered
+    return {
+      side: "BUY", entry: p.px, sl: p.px - p.vol * 2, tp1: p.px + p.vol * 3, tp2: p.px + p.vol * 4,
+      confidence: 20, rr: "2.00", tf: "H1", skillset,
+      why: `${p.sym} insufficient confluence (score ${maxScore}). Waiting for stronger setup.`,
+      time: Date.now(),
+    }
+  }
+
+  const side: "BUY" | "SELL" = bullScore >= bearScore ? "BUY" : "SELL"
+  const reasons = side === "BUY" ? bullReasons : bearReasons
+
+  // Confidence: min 60, scales with confluence score, capped at 94
+  const confidence = Math.min(94, Math.floor(55 + maxScore * 4.5 + Math.random() * 6))
+
+  // Position sizing: tighter SL when score is high
+  const slMult = maxScore >= 6 ? 1.5 : maxScore >= 4 ? 2.0 : 2.5
+  const rrNum = 1.8 + Math.random() * 1.4
+  const slDist = p.vol * slMult
   const tpDist = slDist * rrNum
   const entry = p.px
-  const sl   = side === "BUY" ? entry - slDist : entry + slDist
-  const tp1  = side === "BUY" ? entry + tpDist * 0.6 : entry - tpDist * 0.6
-  const tp2  = side === "BUY" ? entry + tpDist : entry - tpDist
-  const why  = pick(REASONING_TRADE)
-    .replace("{sym}", p.sym)
-    .replace("{h}", fmt(p.px + p.vol * 3, p.digits))
-    .replace("{l}", fmt(p.px - p.vol * 3, p.digits))
-    .replace("{entry}", fmt(entry, p.digits))
+  const sl  = side === "BUY" ? entry - slDist : entry + slDist
+  const tp1 = side === "BUY" ? entry + tpDist * 0.55 : entry - tpDist * 0.55
+  const tp2 = side === "BUY" ? entry + tpDist : entry - tpDist
+
+  // Build institutional-quality reasoning
+  const sessionStr = ctx.activeSessions.length > 0 ? `${ctx.activeSessions.join("/")} session` : "off-session"
+  const topReasons = reasons.slice(0, 3).join(" + ")
+  const keyLevel = side === "BUY"
+    ? (swings.support[0] ? `Support at ${fmt(swings.support[0], p.digits)}` : `low ${fmt(bb.lower, p.digits)}`)
+    : (swings.resistance[0] ? `Resistance at ${fmt(swings.resistance[0], p.digits)}` : `high ${fmt(bb.upper, p.digits)}`)
+  const why = `${p.sym} ${side === "BUY" ? "bullish" : "bearish"} confluence: ${topReasons}. ${keyLevel} aligns with ${sessionStr} momentum. Entry ${fmt(entry, p.digits)}, invalidation ${fmt(sl, p.digits)}, targeting ${fmt(tp2, p.digits)} (1:${rrNum.toFixed(1)} RR).`
+
   return { side, entry, sl, tp1, tp2, confidence, rr: rrNum.toFixed(2), tf: "H1", skillset, why, time: Date.now() }
 }
 
