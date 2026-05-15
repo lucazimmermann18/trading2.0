@@ -74,7 +74,7 @@ export default function TradeApp() {
         const last = p.history[p.history.length - 1]
         const updHistory = last && now - last.time < 60
           ? [...p.history.slice(0, -1), { ...last, close: price, high: Math.max(last.high, price), low: Math.min(last.low, price) }]
-          : [...p.history.slice(-219), { time: now, open: p.px, high: Math.max(p.px, price), low: Math.min(p.px, price), close: price, volume: 500 }]
+          : [...p.history.slice(-219), { time: now, open: p.px, high: Math.max(p.px, price), low: Math.min(p.px, price), close: price, volume: 0 }]
         return { ...p, px: price, history: updHistory }
       }))
     },
@@ -147,7 +147,12 @@ export default function TradeApp() {
     }
 
     setScanning(true)
-    const activePairs = pairs.filter(p => p.active)
+    const activePairs = pairs.filter(p => p.active && p.history.length >= 50)
+    if (!activePairs.length) {
+      logEvent("feed", "Scan skipped — waiting for market data to finish loading")
+      setScanning(false)
+      return
+    }
     logEvent("scan", `Scan started — ${activePairs.length} pair${activePairs.length !== 1 ? "s" : ""}`)
 
     const results = new Map<number, NonNullable<Pair["signal"]> | null>()
@@ -246,6 +251,11 @@ export default function TradeApp() {
 
     if (!useAI) {
       logEvent("config", `${p.sym} · AI not configured — add an API key in Settings`)
+      return
+    }
+
+    if (p.history.length < 50) {
+      logEvent("feed", `${p.sym} · skipped — market data still loading (${p.history.length} bars)`)
       return
     }
 
@@ -350,12 +360,26 @@ export default function TradeApp() {
       return next
     })
 
-  const onToggleActive = (id: number) =>
+  const onToggleActive = (id: number) => {
     setPairs(prev => {
       const next = prev.map(p => p.id === id ? { ...p, active: !p.active } : p)
       persSave({ activePairIds: next.filter(p => p.active).map(p => p.id) })
+      const pair = next.find(p => p.id === id)
+      if (pair?.active && pair.history.length < 50) {
+        fetchBars(pair.sym, "H1", 220).then(bars => {
+          if (!bars.length) return
+          const closes = bars.map(b => b.close)
+          const rsi = calcRSI(closes)
+          const { macdLine } = calcMACD(closes)
+          setPairs(prev2 => prev2.map(p =>
+            p.id !== id ? p : { ...p, history: bars, rsi, macd: macdLine, px: bars[bars.length - 1].close }
+          ))
+          logEvent("feed", `${pair.sym} · ${bars.length} H1 bars loaded`)
+        }).catch(() => logEvent("feed", `${pair.sym} · bar fetch failed`))
+      }
       return next
     })
+  }
 
   const handleSetSkillset = (v: string) => { setSkillset(v); persSave({ skillset: v }); logEvent("config", `Skillset → ${v}`) }
   const handleSetThreshold = (v: number) => { setThreshold(v); persSave({ threshold: v }); logEvent("config", `Signal threshold → ${v}%`) }

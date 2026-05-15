@@ -311,6 +311,7 @@ export function activeSessions(): Session[] {
 }
 
 export function timeAgo(t: number): string {
+  if (!t) return "Never"
   const s = Math.floor((Date.now() - t) / 1000)
   if (s < 60) return `${s}s ago`
   if (s < 3600) return `${Math.floor(s / 60)}m ago`
