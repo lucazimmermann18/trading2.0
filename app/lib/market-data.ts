@@ -146,17 +146,155 @@ export interface MarketContext {
   trend: "UP" | "DOWN" | "NEUTRAL"
   swings: SwingLevels
   activeSessions: string[]
+  atr: number
+  candlePatterns: CandlePattern[]
+  htf: HigherTFContext
+}
+
+// ── ATR (Wilder's) ─────────────────────────────────────────────
+
+export function calcATR(bars: OHLCBar[], period = 14): number {
+  if (bars.length < 2) return 0
+  const trs: number[] = []
+  for (let i = 1; i < bars.length; i++) {
+    trs.push(Math.max(
+      bars[i].high - bars[i].low,
+      Math.abs(bars[i].high - bars[i - 1].close),
+      Math.abs(bars[i].low  - bars[i - 1].close),
+    ))
+  }
+  if (trs.length < period) return trs.reduce((s, v) => s + v, 0) / trs.length
+  let atr = trs.slice(0, period).reduce((s, v) => s + v, 0) / period
+  for (let i = period; i < trs.length; i++) atr = (atr * (period - 1) + trs[i]) / period
+  return atr
+}
+
+// ── Candle Pattern Detection ───────────────────────────────────
+
+export interface CandlePattern {
+  name: string
+  type: "bullish" | "bearish" | "neutral"
+  strength: 1 | 2 | 3
+}
+
+export function detectCandlePatterns(bars: OHLCBar[]): CandlePattern[] {
+  if (bars.length < 3) return []
+  const patterns: CandlePattern[] = []
+  const c  = bars[bars.length - 1]
+  const p1 = bars[bars.length - 2]
+  const p2 = bars[bars.length - 3]
+
+  const cBody  = Math.abs(c.close  - c.open)
+  const cRange = c.high - c.low
+  const p1Body = Math.abs(p1.close - p1.open)
+
+  const upperWick  = c.high - Math.max(c.open, c.close)
+  const lowerWick  = Math.min(c.open, c.close) - c.low
+
+  // Bullish Engulfing
+  if (p1.close < p1.open && c.close > c.open &&
+      c.open <= p1.close && c.close >= p1.open && cBody > p1Body * 0.9)
+    patterns.push({ name: "Bullish Engulfing", type: "bullish", strength: 3 })
+
+  // Bearish Engulfing
+  if (p1.close > p1.open && c.close < c.open &&
+      c.open >= p1.close && c.close <= p1.open && cBody > p1Body * 0.9)
+    patterns.push({ name: "Bearish Engulfing", type: "bearish", strength: 3 })
+
+  // Bullish Pin Bar / Hammer
+  if (cRange > 0 && lowerWick > cRange * 0.55 && upperWick < cRange * 0.25)
+    patterns.push({ name: c.close > c.open ? "Hammer" : "Bullish Pin Bar", type: "bullish", strength: 2 })
+
+  // Bearish Pin Bar / Shooting Star
+  if (cRange > 0 && upperWick > cRange * 0.55 && lowerWick < cRange * 0.25)
+    patterns.push({ name: c.close < c.open ? "Shooting Star" : "Bearish Pin Bar", type: "bearish", strength: 2 })
+
+  // Doji
+  if (cRange > 0 && cBody / cRange < 0.08)
+    patterns.push({ name: "Doji", type: "neutral", strength: 1 })
+
+  // Inside Bar (compression)
+  if (c.high <= p1.high && c.low >= p1.low)
+    patterns.push({ name: "Inside Bar", type: "neutral", strength: 1 })
+
+  // Three White Soldiers
+  if (c.close > c.open && p1.close > p1.open && p2.close > p2.open &&
+      c.close > p1.close && p1.close > p2.close &&
+      c.open > p1.open && p1.open > p2.open)
+    patterns.push({ name: "Three White Soldiers", type: "bullish", strength: 3 })
+
+  // Three Black Crows
+  if (c.close < c.open && p1.close < p1.open && p2.close < p2.open &&
+      c.close < p1.close && p1.close < p2.close &&
+      c.open < p1.open && p1.open < p2.open)
+    patterns.push({ name: "Three Black Crows", type: "bearish", strength: 3 })
+
+  // Morning Star (3-bar bullish reversal)
+  const p2Body = Math.abs(p2.close - p2.open)
+  if (p2.close < p2.open && Math.abs(p1.close - p1.open) < p2Body * 0.4 &&
+      c.close > c.open && c.close > (p2.open + p2.close) / 2)
+    patterns.push({ name: "Morning Star", type: "bullish", strength: 3 })
+
+  // Evening Star
+  if (p2.close > p2.open && Math.abs(p1.close - p1.open) < p2Body * 0.4 &&
+      c.close < c.open && c.close < (p2.open + p2.close) / 2)
+    patterns.push({ name: "Evening Star", type: "bearish", strength: 3 })
+
+  return patterns
+}
+
+// ── Higher Timeframe Context (H4 from H1 bars) ────────────────
+
+export interface HigherTFContext {
+  trend: "UP" | "DOWN" | "NEUTRAL"
+  rsi: number
+  support: number[]
+  resistance: number[]
+  lastClose: number
+  lastBarBullish: boolean
+}
+
+export function buildHigherTFContext(h1Bars: OHLCBar[]): HigherTFContext {
+  // Aggregate H1 → H4 (group every 4 bars)
+  const h4: OHLCBar[] = []
+  for (let i = 0; i + 3 < h1Bars.length; i += 4) {
+    const chunk = h1Bars.slice(i, i + 4)
+    h4.push({
+      time:   chunk[0].time,
+      open:   chunk[0].open,
+      high:   Math.max(...chunk.map(b => b.high)),
+      low:    Math.min(...chunk.map(b => b.low)),
+      close:  chunk[chunk.length - 1].close,
+      volume: chunk.reduce((s, b) => s + (b.volume ?? 0), 0),
+    })
+  }
+  if (h4.length < 5) return { trend: "NEUTRAL", rsi: 50, support: [], resistance: [], lastClose: 0, lastBarBullish: true }
+
+  const closes = h4.map(b => b.close)
+  const last   = h4[h4.length - 1]
+  const swings = calcSwingLevels(h4)
+  return {
+    trend:          calcTrend(closes),
+    rsi:            calcRSI(closes),
+    support:        swings.support.slice(0, 3),
+    resistance:     swings.resistance.slice(0, 3),
+    lastClose:      last.close,
+    lastBarBullish: last.close >= last.open,
+  }
 }
 
 export function buildMarketContext(p: Pair): MarketContext {
   const closes = p.history.map(b => b.close)
-  const rsi = calcRSI(closes)
+  const rsi  = calcRSI(closes)
   const { macdLine, signalLine, histogram } = calcMACD(closes)
-  const bb = calcBB(closes)
-  const trend = calcTrend(closes)
+  const bb     = calcBB(closes)
+  const trend  = calcTrend(closes)
   const swings = calcSwingLevels(p.history)
   const sessions = activeSessions().filter(s => s.active).map(s => s.label)
-  return { rsi, macdLine, signalLine, histogram, bb, trend, swings, activeSessions: sessions }
+  const atr    = calcATR(p.history)
+  const candlePatterns = detectCandlePatterns(p.history.slice(-5))
+  const htf    = buildHigherTFContext(p.history)
+  return { rsi, macdLine, signalLine, histogram, bb, trend, swings, activeSessions: sessions, atr, candlePatterns, htf }
 }
 
 function seedHistory(px: number, vol: number, n = 220): OHLCBar[] {
@@ -227,91 +365,106 @@ export function tickPair(p: Pair): Pair {
 
 export function makeSignal(p: Pair, skillset: string): Signal {
   const ctx = buildMarketContext(p)
-  const { rsi, macdLine, signalLine, histogram, bb, trend, swings } = ctx
+  const { rsi, macdLine, signalLine, histogram, bb, trend, swings, atr, candlePatterns, htf } = ctx
 
-  // Count bullish vs bearish confluences
   let bullScore = 0, bearScore = 0
   const bullReasons: string[] = []
   const bearReasons: string[] = []
 
-  // RSI zones
-  if (rsi < 32) { bullScore += 2; bullReasons.push(`RSI oversold (${rsi.toFixed(1)})`) }
-  else if (rsi < 42) { bullScore += 1; bullReasons.push(`RSI bearish but recovering (${rsi.toFixed(1)})`) }
-  if (rsi > 68) { bearScore += 2; bearReasons.push(`RSI overbought (${rsi.toFixed(1)})`) }
-  else if (rsi > 58) { bearScore += 1; bearReasons.push(`RSI elevated (${rsi.toFixed(1)})`) }
+  // ── H4 Trend (highest weight — trade WITH the higher TF) ─────
+  if (htf.trend === "UP")   { bullScore += 3; bullReasons.push(`H4 uptrend (RSI ${htf.rsi.toFixed(0)})`) }
+  if (htf.trend === "DOWN") { bearScore += 3; bearReasons.push(`H4 downtrend (RSI ${htf.rsi.toFixed(0)})`) }
+  // H4 RSI extremes add extra weight
+  if (htf.rsi < 35) { bullScore += 2; bullReasons.push(`H4 RSI oversold (${htf.rsi.toFixed(0)})`) }
+  if (htf.rsi > 65) { bearScore += 2; bearReasons.push(`H4 RSI overbought (${htf.rsi.toFixed(0)})`) }
 
-  // MACD crossover/direction
+  // H4 key levels
+  const htfProx = p.px * 0.004
+  if (htf.support.length > 0 && Math.abs(p.px - htf.support[0]) < htfProx) {
+    bullScore += 2; bullReasons.push(`H4 support at ${fmt(htf.support[0], p.digits)}`)
+  }
+  if (htf.resistance.length > 0 && Math.abs(p.px - htf.resistance[0]) < htfProx) {
+    bearScore += 2; bearReasons.push(`H4 resistance at ${fmt(htf.resistance[0], p.digits)}`)
+  }
+
+  // ── H1 Indicators ────────────────────────────────────────────
+  if (rsi < 32) { bullScore += 2; bullReasons.push(`H1 RSI oversold (${rsi.toFixed(1)})`) }
+  else if (rsi < 42) { bullScore += 1 }
+  if (rsi > 68) { bearScore += 2; bearReasons.push(`H1 RSI overbought (${rsi.toFixed(1)})`) }
+  else if (rsi > 58) { bearScore += 1 }
+
   if (macdLine > signalLine && histogram > 0) { bullScore += 2; bullReasons.push("MACD bullish crossover") }
-  else if (macdLine > 0) { bullScore += 1; bullReasons.push("MACD above zero") }
+  else if (macdLine > 0) { bullScore += 1 }
   if (macdLine < signalLine && histogram < 0) { bearScore += 2; bearReasons.push("MACD bearish crossover") }
-  else if (macdLine < 0) { bearScore += 1; bearReasons.push("MACD below zero") }
+  else if (macdLine < 0) { bearScore += 1 }
 
-  // Bollinger Band position
+  if (trend === "UP")   { bullScore += 2; bullReasons.push("H1 EMA uptrend") }
+  if (trend === "DOWN") { bearScore += 2; bearReasons.push("H1 EMA downtrend") }
+
   const bbWidth = bb.upper - bb.lower
   if (bbWidth > 0) {
     const pos = (p.px - bb.lower) / bbWidth
-    if (pos < 0.15) { bullScore += 2; bullReasons.push(`Price at lower BB (${fmt(bb.lower, p.digits)})`) }
-    else if (pos < 0.30) { bullScore += 1; bullReasons.push("Price near lower BB") }
-    if (pos > 0.85) { bearScore += 2; bearReasons.push(`Price at upper BB (${fmt(bb.upper, p.digits)})`) }
-    else if (pos > 0.70) { bearScore += 1; bearReasons.push("Price near upper BB") }
+    if (pos < 0.15) { bullScore += 2; bullReasons.push(`Price at lower BB ${fmt(bb.lower, p.digits)}`) }
+    else if (pos < 0.30) { bullScore += 1 }
+    if (pos > 0.85) { bearScore += 2; bearReasons.push(`Price at upper BB ${fmt(bb.upper, p.digits)}`) }
+    else if (pos > 0.70) { bearScore += 1 }
   }
 
-  // Trend alignment
-  if (trend === "UP") { bullScore += 2; bullReasons.push("EMA20 > EMA50 (uptrend)") }
-  if (trend === "DOWN") { bearScore += 2; bearReasons.push("EMA20 < EMA50 (downtrend)") }
-
-  // Key level proximity (within 0.25% of price)
-  const proximity = p.px * 0.0025
-  if (swings.support.length > 0 && Math.abs(p.px - swings.support[0]) < proximity) {
-    bullScore += 2
-    bullReasons.push(`Support at ${fmt(swings.support[0], p.digits)}`)
+  // H1 Key levels
+  const prox = p.px * 0.0025
+  if (swings.support[0] && Math.abs(p.px - swings.support[0]) < prox) {
+    bullScore += 2; bullReasons.push(`H1 support ${fmt(swings.support[0], p.digits)}`)
   }
-  if (swings.resistance.length > 0 && Math.abs(p.px - swings.resistance[0]) < proximity) {
-    bearScore += 2
-    bearReasons.push(`Resistance at ${fmt(swings.resistance[0], p.digits)}`)
+  if (swings.resistance[0] && Math.abs(p.px - swings.resistance[0]) < prox) {
+    bearScore += 2; bearReasons.push(`H1 resistance ${fmt(swings.resistance[0], p.digits)}`)
   }
 
-  // Session quality boost (overlap = better liquidity)
-  const sessionCount = ctx.activeSessions.length
-  if (sessionCount >= 2) {
-    bullScore += 1; bearScore += 1
+  // ── Candle Pattern Confirmation ───────────────────────────────
+  for (const cp of candlePatterns) {
+    if (cp.type === "bullish") { bullScore += cp.strength; bullReasons.push(cp.name) }
+    if (cp.type === "bearish") { bearScore += cp.strength; bearReasons.push(cp.name) }
   }
 
-  // Require minimum score to generate signal
+  // Session liquidity boost
+  if (ctx.activeSessions.length >= 2) { bullScore += 1; bearScore += 1 }
+
+  // ── Hard filter: contra-H4 trend kills the signal ────────────
+  const side: "BUY" | "SELL" = bullScore >= bearScore ? "BUY" : "SELL"
+  const contraTrend = (side === "BUY" && htf.trend === "DOWN") || (side === "SELL" && htf.trend === "UP")
   const maxScore = Math.max(bullScore, bearScore)
-  if (maxScore < 3) {
-    // Not enough confluence — return a low-confidence dummy signal that gets filtered
+
+  // Require score ≥ 4, and if contra-H4 trend require score ≥ 8
+  const minRequired = contraTrend ? 8 : 4
+  if (maxScore < minRequired) {
     return {
-      side: "BUY", entry: p.px, sl: p.px - p.vol * 2, tp1: p.px + p.vol * 3, tp2: p.px + p.vol * 4,
+      side: "BUY", entry: p.px, sl: p.px - atr * 1.5, tp1: p.px + atr * 2, tp2: p.px + atr * 3,
       confidence: 20, rr: "2.00", tf: "H1", skillset,
-      why: `${p.sym} insufficient confluence (score ${maxScore}). Waiting for stronger setup.`,
+      why: `${p.sym} no trade — score ${maxScore}/${minRequired} required${contraTrend ? " (contra H4 trend)" : ""}.`,
       time: Date.now(),
     }
   }
 
-  const side: "BUY" | "SELL" = bullScore >= bearScore ? "BUY" : "SELL"
   const reasons = side === "BUY" ? bullReasons : bearReasons
 
-  // Confidence: min 60, scales with confluence score, capped at 94
-  const confidence = Math.min(94, Math.floor(55 + maxScore * 4.5 + Math.random() * 6))
-
-  // Position sizing: tighter SL when score is high
-  const slMult = maxScore >= 6 ? 1.5 : maxScore >= 4 ? 2.0 : 2.5
-  const rrNum = 1.8 + Math.random() * 1.4
-  const slDist = p.vol * slMult
+  // ── ATR-based position sizing ─────────────────────────────────
+  // SL: 1.5×ATR beyond entry (tighter when score high)
+  const slAtrMult = maxScore >= 10 ? 1.2 : maxScore >= 7 ? 1.5 : 2.0
+  const rrNum = contraTrend ? 2.5 + Math.random() * 0.5 : 1.8 + Math.random() * 1.4
+  const slDist = atr * slAtrMult
   const tpDist = slDist * rrNum
   const entry = p.px
   const sl  = side === "BUY" ? entry - slDist : entry + slDist
   const tp1 = side === "BUY" ? entry + tpDist * 0.55 : entry - tpDist * 0.55
   const tp2 = side === "BUY" ? entry + tpDist : entry - tpDist
 
-  // Build institutional-quality reasoning
-  const sessionStr = ctx.activeSessions.length > 0 ? `${ctx.activeSessions.join("/")} session` : "off-session"
+  // Confidence caps at 94; contra-H4 capped at 75
+  const rawConf = Math.floor(50 + maxScore * 3.5 + Math.random() * 5)
+  const confidence = Math.min(contraTrend ? 75 : 94, rawConf)
+
+  const sessionStr = ctx.activeSessions.length > 0 ? ctx.activeSessions.join("/") + " session" : "off-session"
+  const patternStr = candlePatterns.filter(cp => cp.type !== "neutral").map(cp => cp.name).join(", ")
   const topReasons = reasons.slice(0, 3).join(" + ")
-  const keyLevel = side === "BUY"
-    ? (swings.support[0] ? `Support at ${fmt(swings.support[0], p.digits)}` : `low ${fmt(bb.lower, p.digits)}`)
-    : (swings.resistance[0] ? `Resistance at ${fmt(swings.resistance[0], p.digits)}` : `high ${fmt(bb.upper, p.digits)}`)
-  const why = `${p.sym} ${side === "BUY" ? "bullish" : "bearish"} confluence: ${topReasons}. ${keyLevel} aligns with ${sessionStr} momentum. Entry ${fmt(entry, p.digits)}, invalidation ${fmt(sl, p.digits)}, targeting ${fmt(tp2, p.digits)} (1:${rrNum.toFixed(1)} RR).`
+  const why = `${p.sym} ${side} — ${topReasons}${patternStr ? ` + ${patternStr}` : ""}. ATR-based SL at ${fmt(sl, p.digits)}, target ${fmt(tp2, p.digits)} (1:${rrNum.toFixed(1)}). ${sessionStr}.`
 
   return { side, entry, sl, tp1, tp2, confidence, rr: rrNum.toFixed(2), tf: "H1", skillset, why, time: Date.now() }
 }

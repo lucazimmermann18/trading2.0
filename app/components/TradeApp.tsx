@@ -152,6 +152,9 @@ export default function TradeApp() {
                 support: ctx.swings.support,
                 resistance: ctx.swings.resistance,
                 activeSessions: ctx.activeSessions,
+                atr: ctx.atr,
+                candlePatterns: ctx.candlePatterns,
+                htf: ctx.htf,
               }),
             })
             if (!res.ok) { results.set(p.id, null); return }
@@ -281,6 +284,7 @@ export default function TradeApp() {
             histogram: ctx.histogram, bb: ctx.bb, trend: ctx.trend,
             support: ctx.swings.support, resistance: ctx.swings.resistance,
             activeSessions: ctx.activeSessions,
+            atr: ctx.atr, candlePatterns: ctx.candlePatterns, htf: ctx.htf,
           }),
         })
         if (res.ok) {
