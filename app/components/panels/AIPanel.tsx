@@ -13,6 +13,7 @@ interface Props {
   threshold: number
   setThreshold: (n: number) => void
   scanning: boolean
+  onScanPair: () => Promise<void>
 }
 
 function Section({ label, sub, children }: { label: string; sub?: string; children: React.ReactNode }) {
@@ -73,10 +74,18 @@ function SkillsetSelect({ value, onChange }: { value: string; onChange: (s: stri
   )
 }
 
-export default function AIPanel({ pair, skillset, setSkillset, knowledge, toggleKnowledge, history, threshold, setThreshold, scanning }: Props) {
+export default function AIPanel({ pair, skillset, setSkillset, knowledge, toggleKnowledge, history, threshold, setThreshold, scanning, onScanPair }: Props) {
+  const [manualScanning, setManualScanning] = useState(false)
   const trade = pair.status === "TRADE"
   const conf = pair.signal?.confidence ?? pair.confidence ?? 0
   const confCol = conf >= 70 ? "#00ff88" : conf >= 40 ? "#ffb800" : "#ff3d5a"
+  const isScanning = scanning || manualScanning
+
+  const handleManualScan = async () => {
+    if (isScanning) return
+    setManualScanning(true)
+    try { await onScanPair() } finally { setManualScanning(false) }
+  }
 
   return (
     <aside className="w-[320px] shrink-0 panel border-t-0 border-b-0 border-r-0 flex flex-col">
@@ -97,13 +106,36 @@ export default function AIPanel({ pair, skillset, setSkillset, knowledge, toggle
             ${trade ? "bg-accent-green/15 text-accent-green" : "bg-white/[0.04] text-mute"}`}>
             {trade ? "TRADE" : "NO TRADE"}
           </span>
-          {scanning && (
-            <span className="ml-auto inline-flex items-center gap-1.5 text-[10px] text-accent-blue">
-              <span className="dot bg-accent-blue animate-pulseDot"/>
-              SCANNING…
-            </span>
-          )}
         </div>
+      </div>
+
+      {/* Manual scan button */}
+      <div className="px-4 py-3 border-b hairline shrink-0">
+        <button
+          onClick={handleManualScan}
+          disabled={isScanning}
+          className={`w-full h-9 rounded-md flex items-center justify-center gap-2 text-[11px] font-bold tracking-[0.18em] transition
+            ${isScanning
+              ? "bg-accent-blue/10 text-accent-blue/50 cursor-not-allowed"
+              : "bg-accent-blue/15 text-accent-blue hover:bg-accent-blue/25 active:scale-[0.98]"}`}
+          style={{ boxShadow: isScanning ? "none" : "inset 0 0 0 1px rgba(0,212,255,0.25)" }}
+        >
+          {isScanning ? (
+            <>
+              <svg className="animate-spin" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+              </svg>
+              ANALYSING…
+            </>
+          ) : (
+            <>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35M11 8v6M8 11h6"/>
+              </svg>
+              ANALYSE NOW
+            </>
+          )}
+        </button>
       </div>
 
       <div className="overflow-y-auto flex-1">

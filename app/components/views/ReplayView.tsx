@@ -1,9 +1,9 @@
 "use client"
 import { useState, useEffect, useMemo } from "react"
-import type { HistoryEntry } from "@/app/lib/types"
+import type { Pair, HistoryEntry } from "@/app/lib/types"
 import { fmt } from "@/app/lib/market-data"
 
-interface Props { history: HistoryEntry[] }
+interface Props { history: HistoryEntry[]; pairs: Pair[] }
 
 const LIFECYCLE: Record<string, { label: string; color: string }> = {
   ACTIVE: { label: "ACTIVE", color: "#00d4ff" },
@@ -31,70 +31,125 @@ function KVMini({ label, value, color = "#ffffff" }: { label: string; value: str
   )
 }
 
-function ReplayChart({ signal }: { signal: HistoryEntry }) {
-  const data = useMemo(() => {
-    const out: { open: number; high: number; low: number; close: number }[] = []
-    const vol = Math.abs(signal.entry - signal.sl) * 0.4
-    let prev = signal.entry - vol * 3
-    for (let i = 0; i < 80; i++) {
-      const drift = (Math.random() - 0.5) * vol
-      const open = i === 0 ? prev : out[i - 1].close
-      const close = open + drift + (i > 40 ? (signal.side === "BUY" ? vol * 0.08 : -vol * 0.08) : 0)
-      const high = Math.max(open, close) + Math.random() * vol * 0.4
-      const low  = Math.min(open, close) - Math.random() * vol * 0.4
-      out.push({ open, high, low, close })
-      prev = close
-    }
-    return out
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signal.time])
+type OHLCBar = { open: number; high: number; low: number; close: number; time?: number }
 
-  const W = 900, H = 220, pad = 8
+function buildSyntheticBars(signal: HistoryEntry): OHLCBar[] {
+  const out: OHLCBar[] = []
+  const vol = Math.abs(signal.entry - signal.sl) * 0.4
+  let prev = signal.entry - vol * 3
+  for (let i = 0; i < 80; i++) {
+    const drift = (Math.random() - 0.5) * vol
+    const open = i === 0 ? prev : out[i - 1].close
+    const close = open + drift + (i > 40 ? (signal.side === "BUY" ? vol * 0.08 : -vol * 0.08) : 0)
+    const high = Math.max(open, close) + Math.random() * vol * 0.4
+    const low  = Math.min(open, close) - Math.random() * vol * 0.4
+    out.push({ open, high, low, close })
+    prev = close
+  }
+  return out
+}
+
+function ReplayChart({ signal, pair }: { signal: HistoryEntry; pair: Pair | undefined }) {
+  const { data, isReal, entryBarIdx } = useMemo(() => {
+    if (pair && pair.history.length >= 10) {
+      const sigTimeSec = Math.floor(signal.time / 1000)
+      const bars = pair.history
+      let closestIdx = bars.length - 1
+      let minDiff = Infinity
+      for (let i = 0; i < bars.length; i++) {
+        const diff = Math.abs(bars[i].time - sigTimeSec)
+        if (diff < minDiff) { minDiff = diff; closestIdx = i }
+      }
+      const before = Math.min(closestIdx, 50)
+      const after  = Math.min(bars.length - 1 - closestIdx, 15)
+      const sliced = bars.slice(closestIdx - before, closestIdx + after + 1)
+      return { data: sliced as OHLCBar[], isReal: true, entryBarIdx: before }
+    }
+    return { data: buildSyntheticBars(signal), isReal: false, entryBarIdx: -1 }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pair?.sym, pair?.history.length, signal.time])
+
+  const W = 900, H = 230, pad = 8
   const allPrices = data.flatMap(d => [d.high, d.low])
-  const min = Math.min(...allPrices, signal.sl, signal.tp2)
-  const max = Math.max(...allPrices, signal.sl, signal.tp2)
-  const cw = (W - pad * 2) / data.length
+  const min = Math.min(...allPrices, signal.sl, signal.tp2) - Math.abs(signal.entry - signal.sl) * 0.05
+  const max = Math.max(...allPrices, signal.sl, signal.tp2) + Math.abs(signal.entry - signal.sl) * 0.05
+  const cw = (W - pad * 2) / Math.max(data.length, 1)
   const yv = (v: number) => pad + (1 - (v - min) / (max - min || 1)) * (H - pad * 2)
 
+  const entryX = entryBarIdx >= 0 ? pad + entryBarIdx * cw + cw / 2 : -1
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[240px] block rounded-md overflow-hidden">
-      <rect width={W} height={H} fill="rgba(10,14,26,0.6)" />
-      {/* Level lines */}
-      <line x1={pad} x2={W - pad} y1={yv(signal.entry)} y2={yv(signal.entry)} stroke="#00d4ff" strokeWidth="1.5" />
-      <line x1={pad} x2={W - pad} y1={yv(signal.sl)}    y2={yv(signal.sl)}    stroke="#ff3d5a" strokeWidth="1" strokeDasharray="4 4" />
-      <line x1={pad} x2={W - pad} y1={yv(signal.tp1)}   y2={yv(signal.tp1)}   stroke="#00ff88" strokeWidth="1" strokeDasharray="4 4" />
-      <line x1={pad} x2={W - pad} y1={yv(signal.tp2)}   y2={yv(signal.tp2)}   stroke="#00ff88" strokeWidth="1.2" strokeDasharray="4 4" />
-      {/* Candles */}
-      {data.map((b, i) => {
-        const x = pad + i * cw
-        const up = b.close >= b.open
-        const col = up ? "#00ff88" : "#ff3d5a"
-        const bodyTop = yv(Math.max(b.open, b.close))
-        const bodyH   = Math.max(1, Math.abs(yv(b.open) - yv(b.close)))
-        return (
-          <g key={i}>
-            <line x1={x + cw / 2} x2={x + cw / 2} y1={yv(b.high)} y2={yv(b.low)}
-              stroke={up ? "rgba(0,255,136,0.5)" : "rgba(255,61,90,0.5)"} strokeWidth="1" />
-            <rect x={x + 1} y={bodyTop} width={Math.max(1, cw - 2)} height={bodyH} fill={col} opacity="0.85" />
-          </g>
-        )
-      })}
-      {/* Labels */}
-      {[
-        { v: signal.entry, label: `E ${fmt(signal.entry, signal.digits)}`,  col: "#00d4ff" },
-        { v: signal.sl,    label: `SL ${fmt(signal.sl,    signal.digits)}`,  col: "#ff3d5a" },
-        { v: signal.tp2,   label: `TP2 ${fmt(signal.tp2,  signal.digits)}`,  col: "#00ff88" },
-      ].map(({ v, label, col }) => (
-        <text key={label} x={W - pad - 4} y={Math.max(14, Math.min(H - 4, yv(v) - 4))}
-          textAnchor="end" fill={col} fontSize="9" fontFamily="JetBrains Mono, monospace" opacity="0.9">
-          {label}
-        </text>
-      ))}
-    </svg>
+    <div className="relative">
+      {/* Real/Simulated badge */}
+      <div className={`absolute top-2 left-2 z-10 px-2 h-5 rounded flex items-center gap-1 text-[9px] font-bold tracking-[0.14em]
+        ${isReal ? "bg-accent-green/15 text-accent-green" : "bg-white/[0.06] text-mute"}`}>
+        <span className={`w-1.5 h-1.5 rounded-full ${isReal ? "bg-accent-green" : "bg-mute"}`}/>
+        {isReal ? "LIVE DATA" : "SIMULATED"}
+      </div>
+
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[260px] block rounded-md overflow-hidden">
+        <rect width={W} height={H} fill="rgba(10,14,26,0.7)" />
+
+        {/* Entry vertical marker */}
+        {entryX > 0 && (
+          <line x1={entryX} x2={entryX} y1={pad} y2={H - pad}
+            stroke="rgba(0,212,255,0.18)" strokeWidth="1" strokeDasharray="3 3" />
+        )}
+
+        {/* Level lines */}
+        <line x1={pad} x2={W - pad} y1={yv(signal.entry)} y2={yv(signal.entry)} stroke="#00d4ff" strokeWidth="1.5" />
+        <line x1={pad} x2={W - pad} y1={yv(signal.sl)}    y2={yv(signal.sl)}    stroke="#ff3d5a" strokeWidth="1" strokeDasharray="5 4" />
+        <line x1={pad} x2={W - pad} y1={yv(signal.tp1)}   y2={yv(signal.tp1)}   stroke="#00ff88" strokeWidth="1" strokeDasharray="5 4" />
+        <line x1={pad} x2={W - pad} y1={yv(signal.tp2)}   y2={yv(signal.tp2)}   stroke="#00ff88" strokeWidth="1.4" strokeDasharray="5 4" />
+
+        {/* Candles */}
+        {data.map((b, i) => {
+          const x = pad + i * cw
+          const up = b.close >= b.open
+          const isEntryBar = i === entryBarIdx
+          const col = isEntryBar ? "#00d4ff" : up ? "#00ff88" : "#ff3d5a"
+          const wickCol = isEntryBar ? "rgba(0,212,255,0.6)" : up ? "rgba(0,255,136,0.4)" : "rgba(255,61,90,0.4)"
+          const bodyTop = yv(Math.max(b.open, b.close))
+          const bodyH   = Math.max(1, Math.abs(yv(b.open) - yv(b.close)))
+          return (
+            <g key={i}>
+              <line x1={x + cw / 2} x2={x + cw / 2} y1={yv(b.high)} y2={yv(b.low)}
+                stroke={wickCol} strokeWidth="1" />
+              <rect x={x + 1} y={bodyTop} width={Math.max(1, cw - 2)} height={bodyH}
+                fill={col} opacity={isEntryBar ? "1" : "0.85"} />
+            </g>
+          )
+        })}
+
+        {/* Time labels — show every ~10 bars */}
+        {isReal && data.map((b, i) => {
+          if (!b.time || i % Math.max(1, Math.floor(data.length / 8)) !== 0) return null
+          const x = pad + i * cw + cw / 2
+          const label = new Date(b.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+          return (
+            <text key={i} x={x} y={H - 2} textAnchor="middle" fill="#5a6779"
+              fontSize="7" fontFamily="JetBrains Mono, monospace">{label}</text>
+          )
+        })}
+
+        {/* Level labels */}
+        {[
+          { v: signal.entry, label: `ENTRY ${fmt(signal.entry, signal.digits)}`, col: "#00d4ff" },
+          { v: signal.sl,    label: `SL ${fmt(signal.sl, signal.digits)}`,       col: "#ff3d5a" },
+          { v: signal.tp1,   label: `TP1 ${fmt(signal.tp1, signal.digits)}`,     col: "#00ff88" },
+          { v: signal.tp2,   label: `TP2 ${fmt(signal.tp2, signal.digits)}`,     col: "#00ff88" },
+        ].map(({ v, label, col }) => (
+          <text key={label} x={W - pad - 4} y={Math.max(14, Math.min(H - 12, yv(v) - 4))}
+            textAnchor="end" fill={col} fontSize="9" fontFamily="JetBrains Mono, monospace" opacity="0.9">
+            {label}
+          </text>
+        ))}
+      </svg>
+    </div>
   )
 }
 
-export default function ReplayView({ history }: Props) {
+export default function ReplayView({ history, pairs }: Props) {
   const sorted = useMemo(() => [...history].sort((a, b) => a.time - b.time), [history])
   const total = sorted.length
   const [idx, setIdx] = useState(0)
@@ -186,7 +241,7 @@ export default function ReplayView({ history }: Props) {
           </div>
 
           {/* Chart */}
-          <ReplayChart signal={s} />
+          <ReplayChart signal={s} pair={pairs.find(p => p.sym === s.sym)} />
 
           {/* AI reasoning */}
           <div className="mt-4 px-3 py-2.5 rounded-md bg-white/[0.02] border border-white/[0.05]">

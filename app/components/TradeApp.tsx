@@ -419,6 +419,7 @@ export default function TradeApp() {
               threshold={threshold}
               setThreshold={handleSetThreshold}
               scanning={scanning}
+              onScanPair={() => runPairScan(selected, "Manual")}
             />
           </>
         )}
@@ -427,7 +428,7 @@ export default function TradeApp() {
         {view === "heatmap"      && <HeatmapView pairs={pairs} />}
         {view === "performance"  && <PerformanceView history={history} />}
         {view === "journal"      && <JournalView history={history} onOpen={setSelectedSignal} />}
-        {view === "replay"       && <ReplayView history={history} />}
+        {view === "replay"       && <ReplayView history={history} pairs={pairs} />}
         {view === "system"       && <SystemView />}
       </div>
 
