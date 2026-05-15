@@ -13,12 +13,48 @@ interface Props {
   scanning: boolean
   scannerOn: boolean
   zones: WatchedZone[]
+  warmupDone: boolean
+  barsReady: number
+  totalActive: number
 }
 
-function ScanTimer({ secondsLeft, scanning }: { secondsLeft: number; scanning: boolean }) {
+function ScanTimer({
+  secondsLeft, scanning, warmupDone, barsReady, totalActive,
+}: {
+  secondsLeft: number; scanning: boolean
+  warmupDone: boolean; barsReady: number; totalActive: number
+}) {
   const mm = String(Math.floor(secondsLeft / 60)).padStart(2, "0")
   const ss = String(secondsLeft % 60).padStart(2, "0")
   const pct = ((300 - secondsLeft) / 300) * 100
+  const warmupPct = totalActive > 0 ? (barsReady / totalActive) * 100 : 0
+
+  if (!warmupDone) {
+    return (
+      <div className="flex items-center gap-3 px-3 py-3 glass rounded-lg">
+        <div className="relative w-12 h-12 shrink-0">
+          <svg viewBox="0 0 50 50" className="w-full h-full -rotate-90">
+            <circle cx="25" cy="25" r="20" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3"/>
+            <circle
+              cx="25" cy="25" r="20" fill="none"
+              stroke="#f59e0b" strokeWidth="3" strokeLinecap="round"
+              strokeDasharray={`${2 * Math.PI * 20}`}
+              strokeDashoffset={`${2 * Math.PI * 20 * (1 - warmupPct / 100)}`}
+              className="transition-all duration-700"
+            />
+          </svg>
+          <div className="absolute inset-0 flex items-center justify-center text-[10px] num text-amber-400 font-semibold">
+            {barsReady}/{totalActive}
+          </div>
+        </div>
+        <div className="min-w-0">
+          <div className="text-[10px] tracking-[0.16em] text-amber-400 uppercase">Loading Data</div>
+          <div className="text-[12px] font-medium text-white">Warming up…</div>
+          <div className="text-[10px] text-mute mt-0.5">{barsReady}/{totalActive} pairs ready</div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex items-center gap-3 px-3 py-3 glass rounded-lg">
@@ -87,7 +123,12 @@ function PairRow({
       </div>
 
       <div className="mt-2 flex items-center justify-between gap-2">
-        {trade && sigSide ? (
+        {p.active && p.history.length < 50 ? (
+          <div className="flex items-center gap-1.5 px-2 h-5 rounded-[4px] text-[10px] tracking-[0.14em] bg-amber-500/10 text-amber-400 whitespace-nowrap">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse inline-block"/>
+            Loading…
+          </div>
+        ) : trade && sigSide ? (
           <>
             <div className={`flex items-center gap-1.5 px-2 h-5 rounded-[4px] text-[10px] font-bold tracking-[0.18em] whitespace-nowrap
               ${sigSide === "BUY" ? "bg-accent-green/20 text-accent-green" : "bg-accent-red/20 text-accent-red"}`}>
@@ -116,7 +157,7 @@ function PairRow({
   )
 }
 
-export default function LeftSidebar({ pairs, selectedId, onSelect, onToggleActive, secondsLeft, scanning, scannerOn, zones }: Props) {
+export default function LeftSidebar({ pairs, selectedId, onSelect, onToggleActive, secondsLeft, scanning, scannerOn, zones, warmupDone, barsReady, totalActive }: Props) {
   const [search, setSearch] = useState("")
   const activeCount = pairs.filter(p => p.active).length
   const tradeCount = pairs.filter(p => p.status === "TRADE").length
@@ -178,7 +219,7 @@ export default function LeftSidebar({ pairs, selectedId, onSelect, onToggleActiv
 
       {/* Scanner timer */}
       <div className="p-3 border-t hairline">
-        <ScanTimer secondsLeft={secondsLeft} scanning={scanning} />
+        <ScanTimer secondsLeft={secondsLeft} scanning={scanning} warmupDone={warmupDone} barsReady={barsReady} totalActive={totalActive} />
         <div className="mt-2 flex items-center justify-between px-1">
           <div className="text-[10px] text-mute tracking-[0.12em] uppercase">AI Scanner</div>
           <div className={`text-[10px] font-bold tracking-[0.16em] ${scannerOn ? "text-accent-green" : "text-mute"}`}>

@@ -20,6 +20,7 @@ import {
   activeSessions, buildMarketContext, calcRSI, calcMACD,
 } from "@/app/lib/market-data"
 import { fetchBars } from "@/app/lib/twelvedata"
+import { getCachedBars, isCacheStale, setCachedBars } from "@/app/lib/bar-cache"
 import { useAISettings } from "@/app/hooks/useAISettings"
 import { useTwelveDataWS } from "@/app/hooks/useTwelveDataWS"
 import { usePersistedState } from "@/app/hooks/usePersistedState"
@@ -81,31 +82,65 @@ export default function TradeApp() {
 
   const barFetchRef = useRef(false)
 
-  // Build initial pairs + fetch real H1 bars (staggered to respect rate limits)
+  // Build initial pairs — hydrate from localStorage cache instantly, then
+  // schedule a background refresh for stale / missing entries.
   useEffect(() => {
     if (barFetchRef.current) return
     barFetchRef.current = true
+
     const initialPairs = buildInitialState()
-    setPairs(initialPairs)
-    const activePairs = initialPairs.filter(p => p.active)
-    activePairs.forEach((p, idx) => {
+
+    // Pass 1: load from cache synchronously so the UI has data immediately
+    const hydratedPairs = initialPairs.map(p => {
+      if (!p.active) return p
+      const cached = getCachedBars(p.sym)
+      if (!cached) return p
+      const closes = cached.map(b => b.close)
+      return {
+        ...p,
+        history: cached,
+        rsi: calcRSI(closes),
+        macd: calcMACD(closes).macdLine,
+        px: cached[cached.length - 1].close,
+      }
+    })
+    setPairs(hydratedPairs)
+
+    // Pass 2: refresh entries that are missing or older than 1 h
+    let fetchIdx = 0
+    hydratedPairs.filter(p => p.active).forEach(p => {
+      const needsFetch = p.history.length < 50 || isCacheStale(p.sym)
+      if (!needsFetch) return
+
+      const delay = fetchIdx++ * 500          // stagger to stay inside rate limit
       setTimeout(async () => {
         try {
           const bars = await fetchBars(p.sym, "H1", 220)
           if (!bars.length) return
+          setCachedBars(p.sym, bars)
           const closes = bars.map(b => b.close)
           const rsi = calcRSI(closes)
           const { macdLine } = calcMACD(closes)
           setPairs(prev => prev.map(pair =>
-            pair.id !== p.id ? pair : { ...pair, history: bars, rsi, macd: macdLine, px: bars[bars.length - 1].close }
+            pair.id !== p.id ? pair
+              : { ...pair, history: bars, rsi, macd: macdLine, px: bars[bars.length - 1].close }
           ))
-          logEvent("feed", `${p.sym} · ${bars.length} H1 bars loaded`)
+          logEvent("feed", `${p.sym} · ${bars.length} H1 bars ${p.history.length < 50 ? "loaded" : "refreshed"}`)
         } catch {
           logEvent("feed", `${p.sym} · bar fetch failed`)
         }
-      }, idx * 500)
+      }, delay)
     })
   }, [logEvent])
+
+  // Derived warmup state — true once every active pair has ≥ 50 bars
+  const activePairsList = pairs.filter(p => p.active)
+  const barsReadyCount  = activePairsList.filter(p => p.history.length >= 50).length
+  const warmupDone      = activePairsList.length === 0 || barsReadyCount >= activePairsList.length
+
+  // Keep a ref so the interval can read it without re-subscribing
+  const warmupDoneRef = useRef(warmupDone)
+  warmupDoneRef.current = warmupDone
 
   // Apply persisted state once localStorage is loaded
   useEffect(() => {
@@ -122,10 +157,13 @@ export default function TradeApp() {
     }
   }, [persLoaded, pairs.length, persState])
 
-  // Scanner countdown + session refresh
+  // Scanner countdown — holds at 300 until all active pairs have enough history
   useEffect(() => {
     const i = setInterval(() => {
-      setSecondsLeft(s => scannerOn ? (s > 0 ? s - 1 : 300) : s)
+      setSecondsLeft(s => {
+        if (!warmupDoneRef.current) return 300  // hold during warmup
+        return scannerOn ? (s > 0 ? s - 1 : 300) : s
+      })
       setSessions(activeSessions())
     }, 1000)
     return () => clearInterval(i)
@@ -356,6 +394,7 @@ export default function TradeApp() {
       if (pair?.active && pair.history.length < 50) {
         fetchBars(pair.sym, "H1", 220).then(bars => {
           if (!bars.length) return
+          setCachedBars(pair.sym, bars)
           const closes = bars.map(b => b.close)
           const rsi = calcRSI(closes)
           const { macdLine } = calcMACD(closes)
@@ -419,6 +458,9 @@ export default function TradeApp() {
           scanning={scanning}
           scannerOn={scannerOn}
           zones={zones}
+          warmupDone={warmupDone}
+          barsReady={barsReadyCount}
+          totalActive={activePairsList.length}
         />
 
         {/* Main content area */}
