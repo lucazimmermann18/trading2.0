@@ -5,7 +5,7 @@ import TopNav from "./layout/TopNav"
 import LeftSidebar from "./layout/LeftSidebar"
 import ChartPanel from "./chart/ChartPanel"
 import AIPanel from "./panels/AIPanel"
-import Toast from "./panels/Toast"
+import Toast, { ResolutionToast } from "./panels/Toast"
 import SettingsModal from "./panels/SettingsModal"
 import SignalDetailModal from "./panels/SignalDetailModal"
 import MultiChartView from "./views/MultiChartView"
@@ -25,6 +25,7 @@ import { usePersistedState } from "@/app/hooks/usePersistedState"
 import { useNotificationSettings } from "@/app/hooks/useNotificationSettings"
 import { useZoneWatcher } from "@/app/hooks/useZoneWatcher"
 import { computeZones, type WatchedZone, ZONE_RECOMPUTE_MS } from "@/app/lib/zones"
+import { useSignalLifecycle, type ResolvedSignal } from "@/app/hooks/useSignalLifecycle"
 
 const REASONING_NO_TRADE = [
   "{sym} consolidating inside {h}/{l} range. Compression building, awaiting directional break.",
@@ -46,6 +47,7 @@ export default function TradeApp() {
   const [secondsLeft, setSecondsLeft] = useState(272)
   const [scanning, setScanning] = useState(false)
   const [toast, setToast] = useState<{ pair: Pair; signal: NonNullable<Pair["signal"]> } | null>(null)
+  const [resolvedToast, setResolvedToast] = useState<ResolvedSignal | null>(null)
   const [view, setView] = useState<ViewId>("dashboard")
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [sessions, setSessions] = useState(activeSessions())
@@ -326,6 +328,17 @@ export default function TradeApp() {
     }, [runPairScan]),
   })
 
+  // ── Signal Lifecycle — auto-resolve TP1 / TP2 / SL ──────────
+  useSignalLifecycle({
+    pairs,
+    history,
+    setHistory,
+    setPairs,
+    onResolve: useCallback((resolved: ResolvedSignal) => {
+      setResolvedToast(resolved)
+    }, []),
+  })
+
   const toggleKnowledge = (k: string) =>
     setKnowledge(prev => {
       const next = prev.map(x => x.key === k ? { ...x, on: !x.on } : x)
@@ -417,6 +430,11 @@ export default function TradeApp() {
         {view === "replay"       && <ReplayView history={history} />}
         {view === "system"       && <SystemView />}
       </div>
+
+      <ResolutionToast
+        resolved={resolvedToast}
+        onDismiss={() => setResolvedToast(null)}
+      />
 
       <Toast
         signal={toast?.signal ?? null}

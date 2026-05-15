@@ -1,6 +1,74 @@
 "use client"
+import { useEffect } from "react"
 import type { Pair, Signal } from "@/app/lib/types"
 import { fmt } from "@/app/lib/market-data"
+import type { ResolvedSignal } from "@/app/hooks/useSignalLifecycle"
+
+/* ── Resolution Toast ──────────────────────────────────────── */
+
+interface ResProps {
+  resolved: ResolvedSignal | null
+  onDismiss: () => void
+}
+
+export function ResolutionToast({ resolved, onDismiss }: ResProps) {
+  useEffect(() => {
+    if (!resolved) return
+    const t = setTimeout(onDismiss, 6000)
+    return () => clearTimeout(t)
+  }, [resolved, onDismiss])
+
+  if (!resolved) return null
+
+  const { entry, newState, pnl_r } = resolved
+  const isWin  = newState === "TP1" || newState === "TP2"
+  const color  = isWin ? "#00ff88" : "#ff3d5a"
+  const icon   = isWin ? "✓" : "✗"
+  const label  = newState === "TP1" ? "TP1 HIT — partial profit" : newState === "TP2" ? "TP2 HIT — full target" : "STOP LOSS HIT"
+  const pnlStr = `${pnl_r > 0 ? "+" : ""}${pnl_r.toFixed(2)}R`
+
+  return (
+    <div
+      className="fixed top-20 right-5 z-50 w-[320px] panel rounded-xl p-4 animate-slideInRight"
+      style={{ boxShadow: `0 0 0 1px ${color}55, 0 20px 50px -10px ${color}33` }}
+    >
+      <div className="flex items-center gap-3">
+        <div
+          className="w-10 h-10 rounded-full flex items-center justify-center text-[18px] font-bold shrink-0"
+          style={{ background: color + "20", color }}
+        >
+          {icon}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[9.5px] tracking-[0.22em] uppercase" style={{ color }}>
+            {label}
+          </div>
+          <div className="text-[15px] font-semibold text-white tracking-tight truncate">
+            {entry.sym} · {entry.side}
+          </div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-[18px] font-bold num" style={{ color }}>{pnlStr}</div>
+          <div className="text-[10px] text-mute">P&L</div>
+        </div>
+        <button onClick={onDismiss} className="text-mute hover:text-white transition ml-1">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 6 6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div className="mt-2.5 flex gap-3 text-[10.5px] text-mute num">
+        <span>Entry <span className="text-white">{fmt(entry.entry, entry.digits)}</span></span>
+        <span>SL <span className="text-white">{fmt(entry.sl, entry.digits)}</span></span>
+        <span>Conf <span className="text-white">{entry.confidence}%</span></span>
+      </div>
+      {/* Auto-dismiss progress bar */}
+      <div className="mt-2.5 h-[2px] rounded-full bg-white/10 overflow-hidden">
+        <div className="h-full rounded-full animate-[shrink_6s_linear_forwards]" style={{ background: color }} />
+      </div>
+    </div>
+  )
+}
 
 interface Props {
   signal: Signal | null

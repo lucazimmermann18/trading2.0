@@ -37,6 +37,7 @@ const config: Config = {
         slideInRight:{ "0%": { transform: "translateX(120%)", opacity: "0" }, "100%": { transform: "translateX(0)", opacity: "1" } },
         glowBorder: { "0%,100%": { boxShadow: "inset 0 0 0 1px rgba(0,212,255,0.35), 0 0 22px rgba(0,212,255,0.12)" }, "50%": { boxShadow: "inset 0 0 0 1px rgba(0,212,255,0.7), 0 0 36px rgba(0,212,255,0.28)" } },
         shimmer:    { "0%": { backgroundPosition: "200% 0" }, "100%": { backgroundPosition: "-200% 0" } },
+        shrink:     { "0%": { width: "100%" }, "100%": { width: "0%" } },
       },
       animation: {
         pulseDot:    "pulseDot 1.6s ease-in-out infinite",
@@ -45,6 +46,7 @@ const config: Config = {
         slideInRight:"slideInRight 0.45s cubic-bezier(.2,.8,.2,1)",
         glowBorder:  "glowBorder 2.6s ease-in-out infinite",
         shimmer:     "shimmer 1.8s linear infinite",
+        shrink:      "shrink 6s linear forwards",
       },
     },
   },
