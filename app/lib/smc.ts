@@ -32,11 +32,36 @@ export interface MarketStructure {
   inOTE: boolean
 }
 
+export interface LiquiditySweep {
+  type: "bull" | "bear"  // bull = sell-side swept → bullish reversal expected
+  level: number          // the swept price level
+  barsAgo: number
+  strength: 1 | 2 | 3   // based on wick rejection magnitude
+}
+
+export interface RSIDivergence {
+  type: "bullish" | "bearish"
+  strength: "regular" | "hidden"
+}
+
+export interface DailyContext {
+  pdHigh: number
+  pdLow: number
+  weekHigh: number
+  weekLow: number
+  d1Bias: "UP" | "DOWN" | "NEUTRAL"
+  d1OBs: OrderBlock[]
+}
+
 export interface SMCContext {
   structure: MarketStructure
-  orderBlocks: OrderBlock[]   // nearest 4 unmitigated
-  fvgs: FairValueGap[]        // nearest 4 unfilled
-  liquidity: LiquidityLevel[] // nearest 4 unswept
+  orderBlocks: OrderBlock[]      // H1 nearest 4 unmitigated
+  h4OrderBlocks: OrderBlock[]    // H4 nearest 3 unmitigated (much stronger weight)
+  fvgs: FairValueGap[]
+  liquidity: LiquidityLevel[]
+  sweeps: LiquiditySweep[]       // recent stop-hunt setups — highest quality entry
+  divergence: RSIDivergence | null
+  daily: DailyContext
 }
 
 // ── Swing detection (lookback=3) ───────────────────────────────
@@ -266,13 +291,190 @@ export function detectLiquidity(bars: OHLCBar[], px: number): LiquidityLevel[] {
   return results.sort((a, b) => Math.abs(a.price - px) - Math.abs(b.price - px)).slice(0, 4)
 }
 
+// ── H1 → H4 aggregation ───────────────────────────────────────
+
+function aggregateToH4(h1Bars: OHLCBar[]): OHLCBar[] {
+  const h4: OHLCBar[] = []
+  for (let i = 0; i + 3 < h1Bars.length; i += 4) {
+    const c = h1Bars.slice(i, i + 4)
+    h4.push({
+      time:   c[0].time,
+      open:   c[0].open,
+      high:   Math.max(...c.map(b => b.high)),
+      low:    Math.min(...c.map(b => b.low)),
+      close:  c[c.length - 1].close,
+      volume: c.reduce((s, b) => s + (b.volume ?? 0), 0),
+    })
+  }
+  return h4
+}
+
+// ── H1 → D1 aggregation ───────────────────────────────────────
+
+function aggregateToD1(h1Bars: OHLCBar[]): OHLCBar[] {
+  const dayMap = new Map<string, OHLCBar>()
+  for (const bar of h1Bars) {
+    const d = new Date(bar.time * 1000)
+    const key = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`
+    const ex = dayMap.get(key)
+    if (!ex) {
+      dayMap.set(key, { ...bar })
+    } else {
+      ex.high   = Math.max(ex.high, bar.high)
+      ex.low    = Math.min(ex.low, bar.low)
+      ex.close  = bar.close
+      ex.volume = (ex.volume ?? 0) + (bar.volume ?? 0)
+    }
+  }
+  return Array.from(dayMap.values()).sort((a, b) => a.time - b.time)
+}
+
+// ── H4 Order Blocks ────────────────────────────────────────────
+
+function detectH4OrderBlocks(h1Bars: OHLCBar[], px: number): OrderBlock[] {
+  const h4 = aggregateToH4(h1Bars)
+  if (h4.length < 5) return []
+  return detectOrderBlocks(h4, px).slice(0, 3)
+}
+
+// ── Liquidity Sweep Detection ──────────────────────────────────
+
+function detectLiquiditySweeps(bars: OHLCBar[]): LiquiditySweep[] {
+  const slice = bars.slice(-50)
+  const lb = 3
+  const results: LiquiditySweep[] = []
+
+  for (let i = lb; i < slice.length - lb - 1; i++) {
+    const isHigh = slice.slice(i - lb, i).every(b => b.high <= slice[i].high) &&
+                   slice.slice(i + 1, i + lb + 1).every(b => b.high <= slice[i].high)
+    const isLow  = slice.slice(i - lb, i).every(b => b.low >= slice[i].low) &&
+                   slice.slice(i + 1, i + lb + 1).every(b => b.low >= slice[i].low)
+
+    if (isHigh) {
+      const level = slice[i].high
+      for (let j = i + lb + 1; j < Math.min(i + 16, slice.length); j++) {
+        const bar = slice[j]
+        if (bar.high > level && bar.close < level) {
+          const barsAgo = slice.length - 1 - j
+          const wickRatio = (bar.high - bar.close) / Math.max(bar.high - bar.low, 0.000001)
+          results.push({ type: "bear", level, barsAgo, strength: wickRatio > 0.65 ? 3 : wickRatio > 0.45 ? 2 : 1 })
+          break
+        }
+      }
+    }
+
+    if (isLow) {
+      const level = slice[i].low
+      for (let j = i + lb + 1; j < Math.min(i + 16, slice.length); j++) {
+        const bar = slice[j]
+        if (bar.low < level && bar.close > level) {
+          const barsAgo = slice.length - 1 - j
+          const wickRatio = (bar.close - bar.low) / Math.max(bar.high - bar.low, 0.000001)
+          results.push({ type: "bull", level, barsAgo, strength: wickRatio > 0.65 ? 3 : wickRatio > 0.45 ? 2 : 1 })
+          break
+        }
+      }
+    }
+  }
+
+  return results.sort((a, b) => a.barsAgo - b.barsAgo).slice(0, 3)
+}
+
+// ── RSI Divergence ────────────────────────────────────────────
+
+function calcRSISeries(closes: number[], period = 14): number[] {
+  if (closes.length < period + 1) return closes.map(() => 50)
+  const out: number[] = Array(period).fill(50)
+  let gains = 0, losses = 0
+  for (let i = 1; i <= period; i++) {
+    const d = closes[i] - closes[i - 1]
+    if (d > 0) gains += d; else losses -= d
+  }
+  let ag = gains / period, al = losses / period
+  out.push(al === 0 ? 100 : 100 - 100 / (1 + ag / al))
+  for (let i = period + 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1]
+    const g = d > 0 ? d : 0, l = d < 0 ? -d : 0
+    ag = (ag * (period - 1) + g) / period
+    al = (al * (period - 1) + l) / period
+    out.push(al === 0 ? 100 : 100 - 100 / (1 + ag / al))
+  }
+  return out
+}
+
+function detectRSIDivergence(bars: OHLCBar[]): RSIDivergence | null {
+  if (bars.length < 30) return null
+  const slice  = bars.slice(-60)
+  const closes = slice.map(b => b.close)
+  const rsi    = calcRSISeries(closes)
+  const lb = 3
+
+  const highs: { price: number; rsiVal: number }[] = []
+  const lows:  { price: number; rsiVal: number }[] = []
+
+  for (let i = lb; i < slice.length - lb; i++) {
+    if (slice.slice(i - lb, i).every(b => b.high <= slice[i].high) &&
+        slice.slice(i + 1, i + lb + 1).every(b => b.high <= slice[i].high))
+      highs.push({ price: slice[i].high, rsiVal: rsi[i] })
+    if (slice.slice(i - lb, i).every(b => b.low >= slice[i].low) &&
+        slice.slice(i + 1, i + lb + 1).every(b => b.low >= slice[i].low))
+      lows.push({ price: slice[i].low, rsiVal: rsi[i] })
+  }
+
+  // Bearish: price HH but RSI LH → momentum diverging at top
+  if (highs.length >= 2) {
+    const [h1, h2] = highs.slice(-2)
+    if (h2.price > h1.price && h2.rsiVal < h1.rsiVal)
+      return { type: "bearish", strength: "regular" }
+  }
+
+  // Bullish: price LL but RSI HL → momentum diverging at bottom
+  if (lows.length >= 2) {
+    const [l1, l2] = lows.slice(-2)
+    if (l2.price < l1.price && l2.rsiVal > l1.rsiVal)
+      return { type: "bullish", strength: "regular" }
+  }
+
+  return null
+}
+
+// ── Daily Context (aggregated from H1) ────────────────────────
+
+function buildDailyContext(h1Bars: OHLCBar[], px: number): DailyContext {
+  const d1 = aggregateToD1(h1Bars)
+  if (d1.length < 2) return { pdHigh: px, pdLow: px, weekHigh: px, weekLow: px, d1Bias: "NEUTRAL", d1OBs: [] }
+
+  const prev     = d1[d1.length - 2]  // previous complete day
+  const recent5  = d1.slice(-5)
+  const weekHigh = Math.max(...recent5.map(b => b.high))
+  const weekLow  = Math.min(...recent5.map(b => b.low))
+
+  let d1Bias: "UP" | "DOWN" | "NEUTRAL" = "NEUTRAL"
+  if (d1.length >= 3) {
+    const [a, b, c] = d1.slice(-3)
+    if (c.close > b.close && b.close > a.close) d1Bias = "UP"
+    else if (c.close < b.close && b.close < a.close) d1Bias = "DOWN"
+  }
+
+  return {
+    pdHigh:  prev.high,
+    pdLow:   prev.low,
+    weekHigh, weekLow, d1Bias,
+    d1OBs:   detectOrderBlocks(d1, px).slice(0, 2),
+  }
+}
+
 // ── Main entry point ───────────────────────────────────────────
 
 export function buildSMCContext(bars: OHLCBar[], px: number): SMCContext {
   return {
-    structure:   analyzeStructure(bars, px),
-    orderBlocks: detectOrderBlocks(bars, px),
-    fvgs:        detectFVGs(bars, px),
-    liquidity:   detectLiquidity(bars, px),
+    structure:    analyzeStructure(bars, px),
+    orderBlocks:  detectOrderBlocks(bars, px),
+    h4OrderBlocks: detectH4OrderBlocks(bars, px),
+    fvgs:         detectFVGs(bars, px),
+    liquidity:    detectLiquidity(bars, px),
+    sweeps:       detectLiquiditySweeps(bars),
+    divergence:   detectRSIDivergence(bars),
+    daily:        buildDailyContext(bars, px),
   }
 }

@@ -202,14 +202,60 @@ export default function AIPanel({ pair, skillset, setSkillset, history, threshol
                 </div>
               )}
 
-              {/* Order Blocks */}
+              {/* Liquidity Sweeps — highest priority setup */}
+              {smc.sweeps?.length > 0 && (
+                <div className="space-y-1">
+                  <div className="text-[9px] tracking-[0.16em] uppercase px-1 pt-1 text-accent-yellow font-bold">⚡ Liquidity Sweeps</div>
+                  {smc.sweeps.slice(0, 2).map((sw, i) => (
+                    <div key={i} className="flex items-center gap-2 px-2 py-1.5 rounded-md"
+                      style={{ background: sw.type === "bull" ? "rgba(0,255,136,0.06)" : "rgba(255,61,90,0.06)", border: `1px solid ${sw.type === "bull" ? "rgba(0,255,136,0.2)" : "rgba(255,61,90,0.2)"}` }}>
+                      <span className={`text-[10px] font-bold w-[28px] shrink-0 ${sw.type === "bull" ? "text-accent-green" : "text-accent-red"}`}>
+                        {sw.type === "bull" ? "↑ SS" : "↓ BS"}
+                      </span>
+                      <span className="num text-[10px] text-white flex-1">{sw.level.toFixed(pair.digits)}</span>
+                      <span className="text-[9px] text-mute shrink-0">{sw.barsAgo}B ago</span>
+                      <span className="text-[9px] shrink-0" style={{ color: sw.type === "bull" ? "#00ff88" : "#ff3d5a" }}>{"●".repeat(sw.strength)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* RSI Divergence */}
+              {smc.divergence && (
+                <div className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-accent-violet/10 border border-accent-violet/20">
+                  <span className="text-[9px] font-bold tracking-[0.12em] text-accent-violet">RSI DIV</span>
+                  <span className={`text-[10px] font-semibold flex-1 ${smc.divergence.type === "bullish" ? "text-accent-green" : "text-accent-red"}`}>
+                    {smc.divergence.type === "bullish" ? "↑ Bullish" : "↓ Bearish"} divergence
+                  </span>
+                </div>
+              )}
+
+              {/* H4 Order Blocks */}
+              {smc.h4OrderBlocks?.length > 0 && (
+                <div className="space-y-1">
+                  <div className="text-[9px] tracking-[0.16em] uppercase text-mute/70 px-1 pt-1">H4 Order Blocks <span className="text-accent-blue/60">(strong)</span></div>
+                  {smc.h4OrderBlocks.slice(0, 2).map((ob, i) => (
+                    <div key={i} className="flex items-center gap-2 px-2 py-1 rounded-md bg-white/[0.03] border border-white/[0.05]">
+                      <span className={`text-[10px] font-bold w-[28px] shrink-0 ${ob.type === "bull" ? "text-accent-green" : "text-accent-red"}`}>
+                        {ob.type === "bull" ? "↑ H4" : "↓ H4"}
+                      </span>
+                      <span className="num text-[10px] text-white flex-1 truncate">
+                        {ob.low.toFixed(pair.digits)} – {ob.high.toFixed(pair.digits)}
+                      </span>
+                      <span className="text-[9px] text-accent-blue/70 shrink-0">{"●".repeat(ob.strength)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* H1 Order Blocks */}
               {smc.orderBlocks.length > 0 && (
                 <div className="space-y-1">
-                  <div className="text-[9px] tracking-[0.16em] uppercase text-mute/70 px-1 pt-1">Order Blocks</div>
-                  {smc.orderBlocks.slice(0, 3).map((ob, i) => (
+                  <div className="text-[9px] tracking-[0.16em] uppercase text-mute/70 px-1 pt-1">H1 Order Blocks</div>
+                  {smc.orderBlocks.slice(0, 2).map((ob, i) => (
                     <div key={i} className="flex items-center gap-2 px-2 py-1 rounded-md bg-white/[0.02]">
                       <span className={`text-[10px] font-bold w-[28px] shrink-0 ${ob.type === "bull" ? "text-accent-green" : "text-accent-red"}`}>
-                        {ob.type === "bull" ? "↑ B" : "↓ B"}
+                        {ob.type === "bull" ? "↑ H1" : "↓ H1"}
                       </span>
                       <span className="num text-[10px] text-white flex-1 truncate">
                         {ob.low.toFixed(pair.digits)} – {ob.high.toFixed(pair.digits)}
@@ -224,7 +270,7 @@ export default function AIPanel({ pair, skillset, setSkillset, history, threshol
               {smc.fvgs.length > 0 && (
                 <div className="space-y-1">
                   <div className="text-[9px] tracking-[0.16em] uppercase text-mute/70 px-1 pt-1">Fair Value Gaps</div>
-                  {smc.fvgs.slice(0, 3).map((fvg, i) => (
+                  {smc.fvgs.slice(0, 2).map((fvg, i) => (
                     <div key={i} className="flex items-center gap-2 px-2 py-1 rounded-md bg-white/[0.02]">
                       <span className={`text-[10px] font-bold w-[28px] shrink-0 ${fvg.type === "bull" ? "text-accent-blue" : "text-accent-violet"}`}>
                         {fvg.type === "bull" ? "↑ G" : "↓ G"}
@@ -237,11 +283,25 @@ export default function AIPanel({ pair, skillset, setSkillset, history, threshol
                 </div>
               )}
 
-              {/* Liquidity Levels */}
-              {smc.liquidity.length > 0 && (
+              {/* Liquidity Levels + PDH/PDL */}
+              {(smc.liquidity.length > 0 || smc.daily) && (
                 <div className="space-y-1">
-                  <div className="text-[9px] tracking-[0.16em] uppercase text-mute/70 px-1 pt-1">Liquidity</div>
-                  {smc.liquidity.slice(0, 3).map((liq, i) => (
+                  <div className="text-[9px] tracking-[0.16em] uppercase text-mute/70 px-1 pt-1">Key Levels</div>
+                  {smc.daily && (
+                    <>
+                      <div className="flex items-center gap-2 px-2 py-1 rounded-md bg-white/[0.02]">
+                        <span className="text-[9.5px] font-bold w-[28px] shrink-0 text-accent-yellow/80">PDH</span>
+                        <span className="num text-[10px] text-white flex-1">{smc.daily.pdHigh.toFixed(pair.digits)}</span>
+                        <span className="text-[9px] text-mute">prev day</span>
+                      </div>
+                      <div className="flex items-center gap-2 px-2 py-1 rounded-md bg-white/[0.02]">
+                        <span className="text-[9.5px] font-bold w-[28px] shrink-0 text-accent-yellow/80">PDL</span>
+                        <span className="num text-[10px] text-white flex-1">{smc.daily.pdLow.toFixed(pair.digits)}</span>
+                        <span className="text-[9px] text-mute">prev day</span>
+                      </div>
+                    </>
+                  )}
+                  {smc.liquidity.slice(0, 2).map((liq, i) => (
                     <div key={i} className="flex items-center gap-2 px-2 py-1 rounded-md bg-white/[0.02]">
                       <span className={`text-[9.5px] font-bold w-[28px] shrink-0 ${liq.type === "buyside" ? "text-accent-green/70" : "text-accent-red/70"}`}>
                         {liq.type === "buyside" ? "BSL" : "SSL"}

@@ -14,6 +14,9 @@ interface HTFContext {
 interface SMCOrderBlock { type: "bull" | "bear"; high: number; low: number; mid: number; strength: number }
 interface SMCFVG { type: "bull" | "bear"; top: number; bottom: number; mid: number }
 interface SMCLiquidity { type: "buyside" | "sellside"; price: number; touches: number }
+interface SMCSweep { type: "bull" | "bear"; level: number; barsAgo: number; strength: number }
+interface SMCDivergence { type: "bullish" | "bearish"; strength: string }
+interface SMCDaily { pdHigh: number; pdLow: number; weekHigh: number; weekLow: number; d1Bias: string; d1OBs: SMCOrderBlock[] }
 interface SMCStructure {
   bias: "BULLISH" | "BEARISH" | "RANGING"
   zone: "PREMIUM" | "DISCOUNT" | "EQUILIBRIUM"
@@ -25,8 +28,12 @@ interface SMCStructure {
 interface SMCData {
   structure: SMCStructure
   orderBlocks: SMCOrderBlock[]
+  h4OrderBlocks: SMCOrderBlock[]
   fvgs: SMCFVG[]
   liquidity: SMCLiquidity[]
+  sweeps: SMCSweep[]
+  divergence: SMCDivergence | null
+  daily: SMCDaily
 }
 
 interface AnalyzeRequest {
@@ -91,10 +98,18 @@ C. **Price at a Key Level** (ONE of these, prioritized in order):
    1. Unmitigated Order Block: price trading into an unmitigated OB aligned with bias (strength 2-3 preferred)
    2. Unfilled Fair Value Gap: price entering an unfilled FVG in the bias direction
    3. Major S/R confluence: price at a well-defined swing level confirmed by BB extreme
-D. **Liquidity Context**: Check if a liquidity sweep has occurred — a stop run above buy-side or below sell-side liquidity, followed by displacement, is the highest-quality setup
+D. **Liquidity Sweep** (HIGHEST QUALITY — auto-elevates confidence by 10 points):
+   - Sell-side sweep (bull): price wicked BELOW equal lows then closed above → smart money grabbed sell stops, now expect BUY
+   - Buy-side sweep (bear): price wicked ABOVE equal highs then closed below → smart money grabbed buy stops, now expect SELL
+   - Sweep within last 5 bars + OB/FVG alignment = near-perfect setup
+E. **Daily Context**:
+   - D1 bias (UP/DOWN/NEUTRAL) adds a 3rd TF layer — strongest signals have D1+H4+H1 all aligned
+   - PDH (previous day high) and PDL (previous day low) are institutional levels — price reaction at these is significant
+   - D1 order blocks carry the most weight of all — if price is at a D1 OB aligned with H4+H1, that's the elite setup
 
 ### Step 3 — Classical Confirmation (2+ of these)
 - RSI extreme: <32 for BUY, >68 for SELL
+- RSI divergence at key level: bullish div at support (price LL, RSI HL) or bearish div at resistance (price HH, RSI LH) = very strong confirmation
 - MACD confirmed crossover in signal direction
 - Candle pattern at the entry level (strength 2-3: Engulfing, Pin Bar, Hammer, Morning/Evening Star)
 - Active London or New York session (required for acceptable liquidity)
@@ -118,7 +133,7 @@ D. **Liquidity Context**: Check if a liquidity sweep has occurred — a stop run
 ## OUTPUT — strict JSON only:
 {
   "side": "BUY" | "SELL" | "NO TRADE",
-  "confidence": <integer 0-100: 85+ = 4+ confluences + H4 alignment + OB/FVG entry + session; 90+ = liquidity sweep + OTE + candle pattern>,
+  "confidence": <integer 0-100: 85+ = 4+ confluences + H4+D1 alignment + OB/FVG entry + session; 90+ = liquidity sweep + OTE + candle pattern + RSI divergence>,
   "entry": <number>,
   "sl": <number — below OB low for BUY / above OB high for SELL>,
   "tp1": <number — 55% of TP2 distance>,
@@ -164,8 +179,31 @@ function buildPrompt(r: AnalyzeRequest): string {
 
   const obLines = smc.orderBlocks.length > 0
     ? smc.orderBlocks.map(ob =>
-        `  ${ob.type.toUpperCase()} OB: ${ob.low.toFixed(d)}–${ob.high.toFixed(d)} | mid ${ob.mid.toFixed(d)} | strength ${"★".repeat(ob.strength)}${"☆".repeat(3 - ob.strength)}`
+        `  H1 ${ob.type.toUpperCase()} OB: ${ob.low.toFixed(d)}–${ob.high.toFixed(d)} | mid ${ob.mid.toFixed(d)} | str ${"★".repeat(ob.strength)}${"☆".repeat(3 - ob.strength)}`
       ).join("\n")
+    : "  None detected"
+
+  const h4ObLines = smc.h4OrderBlocks?.length > 0
+    ? smc.h4OrderBlocks.map(ob =>
+        `  H4 ${ob.type.toUpperCase()} OB ★★★: ${ob.low.toFixed(d)}–${ob.high.toFixed(d)} | mid ${ob.mid.toFixed(d)} | str ${"★".repeat(ob.strength)}${"☆".repeat(3 - ob.strength)}`
+      ).join("\n")
+    : "  None detected"
+
+  const sweepLines = smc.sweeps?.length > 0
+    ? smc.sweeps.map(sw =>
+        `  ⚡ ${sw.type.toUpperCase()} SWEEP: ${sw.level.toFixed(d)} | ${sw.barsAgo} bar${sw.barsAgo !== 1 ? "s" : ""} ago | str ${"★".repeat(sw.strength)}${"☆".repeat(3 - sw.strength)}${sw.barsAgo <= 3 ? " ← VERY FRESH" : sw.barsAgo <= 8 ? " ← Fresh" : ""}`
+      ).join("\n")
+    : "  None detected — no recent stop hunt"
+
+  const daily = smc.daily
+  const d1ObLines = daily?.d1OBs?.length > 0
+    ? daily.d1OBs.map(ob =>
+        `  D1 ${ob.type.toUpperCase()} OB ★★★★: ${ob.low.toFixed(d)}–${ob.high.toFixed(d)} | mid ${ob.mid.toFixed(d)}`
+      ).join("\n")
+    : "  None"
+
+  const divLine = smc.divergence
+    ? `  ${smc.divergence.type.toUpperCase()} RSI DIVERGENCE (${smc.divergence.strength}) — strong momentum signal`
     : "  None detected"
 
   const fvgLines = smc.fvgs.length > 0
@@ -197,13 +235,30 @@ H4 RSI:        ${r.htf.rsi.toFixed(1)} (${htfRsiLabel})
 H4 Resistance: ${r.htf.resistance.length > 0 ? r.htf.resistance.map(l => l.toFixed(d)).join(" | ") : "None"}
 H4 Support:    ${r.htf.support.length > 0 ? r.htf.support.map(l => l.toFixed(d)).join(" | ") : "None"}
 
+=== DAILY CONTEXT (D1 bias — 3rd TF layer) ===
+D1 Bias:      ${daily?.d1Bias ?? "N/A"} (3-day close direction)
+PDH:          ${daily?.pdHigh?.toFixed(d) ?? "N/A"} (previous day high — institutional resistance)
+PDL:          ${daily?.pdLow?.toFixed(d) ?? "N/A"} (previous day low — institutional support)
+Weekly Range: ${daily?.weekLow?.toFixed(d) ?? "N/A"} → ${daily?.weekHigh?.toFixed(d) ?? "N/A"}
+D1 Order Blocks (highest priority — strongest levels):
+${d1ObLines}
+
+=== LIQUIDITY SWEEPS (stop hunts — highest quality setups) ===
+${sweepLines}
+
+=== RSI DIVERGENCE ===
+${divLine}
+
 === H1 SMART MONEY ANALYSIS ===
 Structure Bias: ${struct.bias}
 Price Zone:     ${struct.zone}${struct.inOTE ? " * OTE ZONE" : ""} (${pos}% of swing range)
 Swing Range:    ${struct.recentSwingLow.toFixed(d)} -> ${struct.recentSwingHigh.toFixed(d)}
 Last BOS/CHoCH: ${lastBOSStr}
 
-Order Blocks (unmitigated, nearest first):
+H4 Order Blocks (strong — use as primary entry zone):
+${h4ObLines}
+
+H1 Order Blocks (unmitigated, nearest first):
 ${obLines}
 
 Fair Value Gaps (unfilled, nearest first):
@@ -226,13 +281,14 @@ ${patternStr}
 ${ohlcv}
 
 === TASK ===
-1. Is H4 trend ${r.htf.trend}? Only take ${r.htf.trend === "UP" ? "BUY" : r.htf.trend === "DOWN" ? "SELL" : "NO"} setups.
-2. Is H1 structure (${struct.bias}) aligned with H4 (${r.htf.trend})? If not -> NO TRADE.
-3. Is price at an unmitigated OB, unfilled FVG, or key level? If not -> NO TRADE.
-4. Is price in the correct zone (DISCOUNT for BUY, PREMIUM for SELL)? If mid-range with no OB/FVG -> NO TRADE.
-5. Are 2+ classical confirmations present (RSI extreme, MACD crossover, candle pattern, active session)?
-6. Does TP2 achieve >=1:2.5 RR? If not -> NO TRADE.
-7. Only output a signal if ALL conditions pass. When in doubt -> NO TRADE.`
+1. D1+H4+H1 alignment: D1 bias=${daily?.d1Bias ?? "N/A"}, H4=${r.htf.trend}, H1=${struct.bias}. All three should agree for highest quality. Two out of three minimum.
+2. Liquidity sweep present? ${smc.sweeps?.length > 0 ? `YES — ${smc.sweeps[0].type.toUpperCase()} sweep ${smc.sweeps[0].barsAgo} bars ago. Check for reversal setup in ${smc.sweeps[0].type === "bull" ? "BUY" : "SELL"} direction.` : "None — look for OB/FVG confluence instead."}
+3. Is price at a key level? Priority: D1 OB > H4 OB > H1 OB > FVG > S/R. If not within 0.3×ATR of any level -> NO TRADE.
+4. Zone check: DISCOUNT for BUY, PREMIUM for SELL. Mid-range without OB/FVG -> NO TRADE.
+5. RSI divergence: ${smc.divergence ? `${smc.divergence.type.toUpperCase()} divergence detected — adds strong confirmation` : "None — rely on RSI extreme or MACD crossover"}.
+6. Are 2+ classical confirmations present? (RSI extreme, MACD crossover, candle pattern, active session)
+7. Does TP2 achieve >=1:2.5 RR at the next structural level? PDH=${daily?.pdHigh?.toFixed(d) ?? "N/A"}, PDL=${daily?.pdLow?.toFixed(d) ?? "N/A"} are valid TP targets.
+8. Only output a signal if conditions pass. A sweep + aligned OB + session + candle pattern = elite signal (confidence 88+). When in doubt -> NO TRADE.`
 }
 
 // ── JSON extraction helper ─────────────────────────────────────
