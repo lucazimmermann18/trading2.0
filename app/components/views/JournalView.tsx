@@ -74,6 +74,34 @@ export default function JournalView({ history, onOpen }: Props) {
   const losses = history.filter(h => (h.pnl_r ?? 0) < 0).length
   const active = history.filter(h => h.state === "ACTIVE").length
 
+  const downloadCSV = () => {
+    const headers = ["Time","Pair","Side","TF","Strategy","Entry","SL","TP1","TP2","Confidence","RR","State","PnL_R","Notes"]
+    const esc = (v: string | number) => {
+      const s = String(v)
+      return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s
+    }
+    const rows = filtered.map(s => [
+      new Date(s.time).toISOString(),
+      s.sym, s.side, s.tf, s.skillset,
+      s.entry.toFixed(s.digits),
+      s.sl.toFixed(s.digits),
+      s.tp1.toFixed(s.digits),
+      s.tp2.toFixed(s.digits),
+      s.confidence,
+      s.rr, s.state,
+      s.pnl_r != null ? s.pnl_r.toFixed(2) : "",
+      s.notes ?? "",
+    ].map(esc).join(","))
+    const csv = [headers.join(","), ...rows].join("\n")
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `tradeai-journal-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
       {/* Header */}
@@ -92,6 +120,18 @@ export default function JournalView({ history, onOpen }: Props) {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {/* export csv */}
+          <button
+            onClick={downloadCSV}
+            className="h-9 px-3 rounded-md border border-white/10 text-[11px] text-white hover:bg-white/[0.04] transition flex items-center gap-1.5"
+          >
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Export CSV
+          </button>
           {/* filter tabs */}
           <div className="flex items-center gap-1 px-1 py-1 rounded-md glass">
             {FILTERS.map(f => (

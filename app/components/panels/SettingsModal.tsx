@@ -4,8 +4,10 @@ import type { Pair } from "@/app/lib/types"
 import { SKILLSETS, fmt } from "@/app/lib/market-data"
 import { PROVIDERS, BADGE_COLORS, type ProviderKey } from "@/app/lib/ai-providers"
 import type { useAISettings } from "@/app/hooks/useAISettings"
+import type { useNotificationSettings } from "@/app/hooks/useNotificationSettings"
 
 type AISettingsHook = ReturnType<typeof useAISettings>
+type NotifSettingsHook = ReturnType<typeof useNotificationSettings>
 
 interface Props {
   open: boolean
@@ -17,6 +19,7 @@ interface Props {
   threshold: number
   setThreshold: (n: number) => void
   aiSettings: AISettingsHook
+  notifSettings: NotifSettingsHook
 }
 
 const TABS = [
@@ -407,21 +410,53 @@ function StrategyTab({
 }
 
 /* ── Notifications Tab ─────────────────────────────────────── */
-function NotificationsTab() {
-  const [vals, setVals] = useState({ telegram_token: "", telegram_chat: "", webhook: "", email: "" })
-  const [channels, setChannels] = useState({ telegram: true, email: false, webhook: false, discord: false })
-  const set = (k: keyof typeof vals) => (v: string) => setVals(s => ({ ...s, [k]: v }))
+function NotificationsTab({ notifSettings }: { notifSettings: NotifSettingsHook }) {
+  const { settings, setField } = notifSettings
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<string | null>(null)
+
+  const setChannel = (c: keyof typeof settings.channels, v: boolean) =>
+    setField("channels", { ...settings.channels, [c]: v })
+
+  const handleTest = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const res = await fetch("/api/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          signal: {
+            sym: "XAU/USD", side: "BUY", entry: 2342.18, sl: 2320.00,
+            tp1: 2365.00, tp2: 2390.00, confidence: 82, rr: "2.40",
+            tf: "H1", skillset: "Smart Money Concepts",
+            why: "Test alert from TradeAI Pro settings.", digits: 2,
+          },
+          channels: settings.channels,
+          telegramToken: settings.telegramToken,
+          telegramChatId: settings.telegramChatId,
+          webhookUrl: settings.webhookUrl,
+          discordWebhookUrl: settings.discordWebhookUrl,
+        }),
+      })
+      const data = await res.json()
+      setTestResult(res.ok ? "Test sent successfully" : (data.error ?? "Send failed"))
+    } catch {
+      setTestResult("Network error")
+    }
+    setTesting(false)
+  }
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-2">
-        {(Object.keys(channels) as (keyof typeof channels)[]).map(c => (
+        {(Object.keys(settings.channels) as (keyof typeof settings.channels)[]).map(c => (
           <label
             key={c}
             className={`flex items-center gap-2.5 px-3 h-10 rounded-md border cursor-pointer transition
-              ${channels[c] ? "border-accent-blue/30 bg-accent-blue/[0.06]" : "border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]"}`}
+              ${settings.channels[c] ? "border-accent-blue/30 bg-accent-blue/[0.06]" : "border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]"}`}
           >
-            <Toggle checked={channels[c]} onChange={v => setChannels(s => ({ ...s, [c]: v }))} />
+            <Toggle checked={settings.channels[c]} onChange={v => setChannel(c, v)} />
             <span className="text-[12px] text-white capitalize">{c}</span>
           </label>
         ))}
@@ -430,26 +465,35 @@ function NotificationsTab() {
       <div className="space-y-3 pt-1">
         <div>
           <Field label="Telegram bot token" />
-          <TextInput value={vals.telegram_token} onChange={set("telegram_token")} placeholder="123456:ABC-DEF…" />
+          <TextInput value={settings.telegramToken} onChange={v => setField("telegramToken", v)} placeholder="123456:ABC-DEF…" type="password" />
         </div>
         <div>
           <Field label="Telegram chat ID" />
-          <TextInput value={vals.telegram_chat} onChange={set("telegram_chat")} placeholder="-1001234567890" />
+          <TextInput value={settings.telegramChatId} onChange={v => setField("telegramChatId", v)} placeholder="-1001234567890" />
         </div>
         <div>
           <Field label="Webhook URL" />
-          <TextInput value={vals.webhook} onChange={set("webhook")} placeholder="https://yourdomain.com/hooks/tradeai" />
+          <TextInput value={settings.webhookUrl} onChange={v => setField("webhookUrl", v)} placeholder="https://yourdomain.com/hooks/tradeai" />
         </div>
         <div>
-          <Field label="Email recipient" />
-          <TextInput value={vals.email} onChange={set("email")} placeholder="signals@yourdesk.com" type="email" />
+          <Field label="Discord webhook URL" />
+          <TextInput value={settings.discordWebhookUrl} onChange={v => setField("discordWebhookUrl", v)} placeholder="https://discord.com/api/webhooks/…" type="password" />
         </div>
       </div>
 
-      <div className="flex gap-2 pt-1">
-        <button className="h-8 px-4 rounded-md border border-white/10 text-[11px] text-white hover:bg-white/[0.04] transition">
-          Send test alert
+      <div className="flex items-center gap-3 pt-1">
+        <button
+          onClick={handleTest}
+          disabled={testing}
+          className="h-8 px-4 rounded-md border border-white/10 text-[11px] text-white hover:bg-white/[0.04] transition disabled:opacity-40"
+        >
+          {testing ? "Sending…" : "Send test alert"}
         </button>
+        {testResult && (
+          <span className={`text-[11px] ${testResult.includes("success") ? "text-accent-green" : "text-accent-red"}`}>
+            {testResult}
+          </span>
+        )}
       </div>
     </div>
   )
@@ -560,7 +604,7 @@ export default function SettingsModal({
   pairs, onTogglePair,
   skillset, setSkillset,
   threshold, setThreshold,
-  aiSettings,
+  aiSettings, notifSettings,
 }: Props) {
   const [tab, setTab] = useState<TabKey>("ai-models")
   const overlayRef = useRef<HTMLDivElement>(null)
@@ -656,7 +700,7 @@ export default function SettingsModal({
             {tab === "ai-models"  && <AIModelsTab aiSettings={aiSettings} />}
             {tab === "pairs"      && <PairsTab pairs={pairs} onTogglePair={onTogglePair} />}
             {tab === "strategy"   && <StrategyTab skillset={skillset} setSkillset={setSkillset} threshold={threshold} setThreshold={setThreshold} />}
-            {tab === "notif"      && <NotificationsTab />}
+            {tab === "notif"      && <NotificationsTab notifSettings={notifSettings} />}
             {tab === "apis"       && <APIsTab />}
             {tab === "schedule"   && <ScheduleTab />}
           </div>

@@ -21,6 +21,8 @@ import {
 } from "@/app/lib/market-data"
 import { useAISettings } from "@/app/hooks/useAISettings"
 import { useTwelveDataWS } from "@/app/hooks/useTwelveDataWS"
+import { usePersistedState } from "@/app/hooks/usePersistedState"
+import { useNotificationSettings } from "@/app/hooks/useNotificationSettings"
 
 const REASONING_NO_TRADE = [
   "{sym} consolidating inside {h}/{l} range. Compression building, awaiting directional break.",
@@ -38,6 +40,7 @@ export default function TradeApp() {
   const [knowledge, setKnowledge] = useState<KnowledgeModule[]>(KNOWLEDGE)
   const [threshold, setThreshold] = useState(75)
   const [scannerOn, setScannerOn] = useState(true)
+  const persistedAppliedRef = useRef(false)
   const [secondsLeft, setSecondsLeft] = useState(272)
   const [scanning, setScanning] = useState(false)
   const [toast, setToast] = useState<{ pair: Pair; signal: NonNullable<Pair["signal"]> } | null>(null)
@@ -49,6 +52,8 @@ export default function TradeApp() {
   const [selectedSignal, setSelectedSignal] = useState<HistoryEntry | null>(null)
   const seededRef = useRef(false)
   const aiSettings = useAISettings()
+  const notifSettings = useNotificationSettings()
+  const { loaded: persLoaded, state: persState, save: persSave } = usePersistedState()
 
   // Live WebSocket prices
   const activeSymbols = pairs.filter(p => p.active).map(p => p.sym)
@@ -74,6 +79,27 @@ export default function TradeApp() {
     setPairs(initialPairs)
     setHistory(generateHistory(initialPairs, 14))
   }, [])
+
+  // Apply persisted state once localStorage is loaded
+  useEffect(() => {
+    if (!persLoaded || persistedAppliedRef.current || pairs.length === 0) return
+    persistedAppliedRef.current = true
+    const s = persState
+    if (s.skillset) setSkillset(s.skillset)
+    if (s.threshold) setThreshold(s.threshold)
+    if (s.timeframe) setTimeframe(s.timeframe as Timeframe)
+    setScannerOn(s.scannerOn)
+    if (s.activePairIds.length > 0) {
+      const ids = new Set(s.activePairIds)
+      setPairs(prev => prev.map(p => ({ ...p, active: ids.has(p.id) })))
+    }
+    if (Object.keys(s.knowledge).length > 0) {
+      setKnowledge(prev => prev.map(k => ({
+        ...k,
+        on: k.key in s.knowledge ? s.knowledge[k.key] : k.on,
+      })))
+    }
+  }, [persLoaded, pairs.length, persState])
 
   // Live price ticking
   useEffect(() => {
@@ -140,6 +166,7 @@ export default function TradeApp() {
           setToast({ pair: p, signal: sig })
           setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 200))
           setUnread(u => u + 1)
+          notifSettings.sendSignal({ ...sig, sym: p.sym, digits: p.digits })
           return { ...p, status: "TRADE" as const, signal: sig, lastScan: Date.now(), confidence: sig.confidence }
         }
         return {
@@ -172,6 +199,7 @@ export default function TradeApp() {
                 setToast({ pair: p, signal: sig })
                 setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 200))
                 setUnread(u => u + 1)
+                notifSettings.sendSignal({ ...sig, sym: p.sym, digits: p.digits })
                 return { ...p, status: "TRADE" as const, signal: sig, lastScan: Date.now(), confidence: sig.confidence }
               }
             }
@@ -191,7 +219,7 @@ export default function TradeApp() {
         setScanning(false)
       }, 1700)
     }
-  }, [skillset, threshold, timeframe, pairs, aiSettings])
+  }, [skillset, threshold, timeframe, pairs, aiSettings, notifSettings])
 
   useEffect(() => {
     if (secondsLeft === 0 && scannerOn) runScan()
@@ -219,10 +247,23 @@ export default function TradeApp() {
   }, [pairs.length])
 
   const toggleKnowledge = (k: string) =>
-    setKnowledge(prev => prev.map(x => x.key === k ? { ...x, on: !x.on } : x))
+    setKnowledge(prev => {
+      const next = prev.map(x => x.key === k ? { ...x, on: !x.on } : x)
+      persSave({ knowledge: Object.fromEntries(next.map(x => [x.key, x.on])) })
+      return next
+    })
 
   const onToggleActive = (id: number) =>
-    setPairs(prev => prev.map(p => p.id === id ? { ...p, active: !p.active } : p))
+    setPairs(prev => {
+      const next = prev.map(p => p.id === id ? { ...p, active: !p.active } : p)
+      persSave({ activePairIds: next.filter(p => p.active).map(p => p.id) })
+      return next
+    })
+
+  const handleSetSkillset = (v: string) => { setSkillset(v); persSave({ skillset: v }) }
+  const handleSetThreshold = (v: number) => { setThreshold(v); persSave({ threshold: v }) }
+  const handleSetTimeframe = (v: Timeframe) => { setTimeframe(v); persSave({ timeframe: v }) }
+  const handleSetScannerOn = (v: boolean) => { setScannerOn(v); persSave({ scannerOn: v }) }
 
   const handleOpenPair = (id: number) => {
     setSelectedId(id)
@@ -243,7 +284,7 @@ export default function TradeApp() {
     <div className="flex flex-col h-screen bg-ink-950 overflow-hidden">
       <TopNav
         scannerOn={scannerOn}
-        setScannerOn={setScannerOn}
+        setScannerOn={handleSetScannerOn}
         notifications={unread}
         sessions={sessions}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -273,16 +314,16 @@ export default function TradeApp() {
         {/* Main content area */}
         {view === "dashboard" && (
           <>
-            <ChartPanel pair={selected} timeframe={timeframe} setTimeframe={setTimeframe} />
+            <ChartPanel pair={selected} timeframe={timeframe} setTimeframe={handleSetTimeframe} />
             <AIPanel
               pair={selected}
               skillset={skillset}
-              setSkillset={setSkillset}
+              setSkillset={handleSetSkillset}
               knowledge={knowledge}
               toggleKnowledge={toggleKnowledge}
               history={history}
               threshold={threshold}
-              setThreshold={setThreshold}
+              setThreshold={handleSetThreshold}
               scanning={scanning}
             />
           </>
@@ -316,10 +357,11 @@ export default function TradeApp() {
         pairs={pairs}
         onTogglePair={onToggleActive}
         skillset={skillset}
-        setSkillset={setSkillset}
+        setSkillset={handleSetSkillset}
         threshold={threshold}
-        setThreshold={setThreshold}
+        setThreshold={handleSetThreshold}
         aiSettings={aiSettings}
+        notifSettings={notifSettings}
       />
     </div>
   )
