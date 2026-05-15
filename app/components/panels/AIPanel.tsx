@@ -14,6 +14,7 @@ interface Props {
   setThreshold: (n: number) => void
   scanning: boolean
   onScanPair: () => Promise<void>
+  aiConfigured: boolean
 }
 
 function Section({ label, sub, children }: { label: string; sub?: string; children: React.ReactNode }) {
@@ -74,7 +75,7 @@ function SkillsetSelect({ value, onChange }: { value: string; onChange: (s: stri
   )
 }
 
-export default function AIPanel({ pair, skillset, setSkillset, knowledge, toggleKnowledge, history, threshold, setThreshold, scanning, onScanPair }: Props) {
+export default function AIPanel({ pair, skillset, setSkillset, knowledge, toggleKnowledge, history, threshold, setThreshold, scanning, onScanPair, aiConfigured }: Props) {
   const [manualScanning, setManualScanning] = useState(false)
   const trade = pair.status === "TRADE"
   const conf = pair.signal?.confidence ?? pair.confidence ?? 0
@@ -111,31 +112,45 @@ export default function AIPanel({ pair, skillset, setSkillset, knowledge, toggle
 
       {/* Manual scan button */}
       <div className="px-4 py-3 border-b hairline shrink-0">
-        <button
-          onClick={handleManualScan}
-          disabled={isScanning}
-          className={`w-full h-9 rounded-md flex items-center justify-center gap-2 text-[11px] font-bold tracking-[0.18em] transition
-            ${isScanning
-              ? "bg-accent-blue/10 text-accent-blue/50 cursor-not-allowed"
-              : "bg-accent-blue/15 text-accent-blue hover:bg-accent-blue/25 active:scale-[0.98]"}`}
-          style={{ boxShadow: isScanning ? "none" : "inset 0 0 0 1px rgba(0,212,255,0.25)" }}
-        >
-          {isScanning ? (
-            <>
-              <svg className="animate-spin" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+        {aiConfigured ? (
+          <button
+            onClick={handleManualScan}
+            disabled={isScanning}
+            className={`w-full h-9 rounded-md flex items-center justify-center gap-2 text-[11px] font-bold tracking-[0.18em] transition
+              ${isScanning
+                ? "bg-accent-blue/10 text-accent-blue/50 cursor-not-allowed"
+                : "bg-accent-blue/15 text-accent-blue hover:bg-accent-blue/25 active:scale-[0.98]"}`}
+            style={{ boxShadow: isScanning ? "none" : "inset 0 0 0 1px rgba(0,212,255,0.25)" }}
+          >
+            {isScanning ? (
+              <>
+                <svg className="animate-spin" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                </svg>
+                ANALYSING…
+              </>
+            ) : (
+              <>
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35M11 8v6M8 11h6"/>
+                </svg>
+                ANALYSE NOW
+              </>
+            )}
+          </button>
+        ) : (
+          <div className="w-full rounded-md flex flex-col items-center justify-center gap-1.5 p-3 bg-accent-violet/5 border border-accent-violet/20">
+            <div className="flex items-center gap-2 text-accent-violet">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 8v4M12 16h.01"/>
               </svg>
-              ANALYSING…
-            </>
-          ) : (
-            <>
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35M11 8v6M8 11h6"/>
-              </svg>
-              ANALYSE NOW
-            </>
-          )}
-        </button>
+              <span className="text-[11px] font-bold tracking-[0.16em]">AI KEY REQUIRED</span>
+            </div>
+            <span className="text-[10px] text-mute text-center leading-relaxed">
+              Configure your API key in Settings to enable AI analysis
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="overflow-y-auto flex-1">

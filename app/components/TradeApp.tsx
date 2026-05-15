@@ -16,9 +16,10 @@ import ReplayView from "./views/ReplayView"
 import SystemView from "./views/SystemView"
 import type { Pair, HistoryEntry, KnowledgeModule, ViewId, Timeframe, AuditEntry, AuditKind, SystemMetrics } from "@/app/lib/types"
 import {
-  buildInitialState, tickPair, makeSignal, KNOWLEDGE,
-  activeSessions, pick, fmt, generateHistory, buildMarketContext,
+  buildInitialState, KNOWLEDGE,
+  activeSessions, buildMarketContext, calcRSI, calcMACD,
 } from "@/app/lib/market-data"
+import { fetchBars } from "@/app/lib/twelvedata"
 import { useAISettings } from "@/app/hooks/useAISettings"
 import { useTwelveDataWS } from "@/app/hooks/useTwelveDataWS"
 import { usePersistedState } from "@/app/hooks/usePersistedState"
@@ -27,13 +28,6 @@ import { useZoneWatcher } from "@/app/hooks/useZoneWatcher"
 import { computeZones, type WatchedZone, ZONE_RECOMPUTE_MS } from "@/app/lib/zones"
 import { useSignalLifecycle, type ResolvedSignal } from "@/app/hooks/useSignalLifecycle"
 
-const REASONING_NO_TRADE = [
-  "{sym} consolidating inside {h}/{l} range. Compression building, awaiting directional break.",
-  "{sym} showing mixed structure on H1. No clean liquidity sweep yet, monitoring for displacement.",
-  "{sym} sitting at mid-range. Insufficient confluence — waiting for session open to confirm bias.",
-  "{sym} respecting {h} resistance for now. No bearish BOS confirmed, no entry.",
-  "{sym} chopping under {h}. Order flow neutral, RSI flat, no edge.",
-]
 
 export default function TradeApp() {
   const [pairs, setPairs] = useState<Pair[]>([])
@@ -55,7 +49,6 @@ export default function TradeApp() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [selectedSignal, setSelectedSignal] = useState<HistoryEntry | null>(null)
   const [zones, setZones] = useState<WatchedZone[]>([])
-  const seededRef = useRef(false)
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([])
   const auditIdRef = useRef(0)
   const [metrics, setMetrics] = useState<SystemMetrics>({
@@ -87,12 +80,33 @@ export default function TradeApp() {
     },
   })
 
-  // Build initial pairs + seed 14-day history
+  const barFetchRef = useRef(false)
+
+  // Build initial pairs + fetch real H1 bars (staggered to respect rate limits)
   useEffect(() => {
+    if (barFetchRef.current) return
+    barFetchRef.current = true
     const initialPairs = buildInitialState()
     setPairs(initialPairs)
-    setHistory(generateHistory(initialPairs, 14))
-  }, [])
+    const activePairs = initialPairs.filter(p => p.active)
+    activePairs.forEach((p, idx) => {
+      setTimeout(async () => {
+        try {
+          const bars = await fetchBars(p.sym, "H1", 220)
+          if (!bars.length) return
+          const closes = bars.map(b => b.close)
+          const rsi = calcRSI(closes)
+          const { macdLine } = calcMACD(closes)
+          setPairs(prev => prev.map(pair =>
+            pair.id !== p.id ? pair : { ...pair, history: bars, rsi, macd: macdLine, px: bars[bars.length - 1].close }
+          ))
+          logEvent("feed", `${p.sym} · ${bars.length} H1 bars loaded`)
+        } catch {
+          logEvent("feed", `${p.sym} · bar fetch failed`)
+        }
+      }, idx * 500)
+    })
+  }, [logEvent])
 
   // Apply persisted state once localStorage is loaded
   useEffect(() => {
@@ -115,12 +129,6 @@ export default function TradeApp() {
     }
   }, [persLoaded, pairs.length, persState])
 
-  // Live price ticking
-  useEffect(() => {
-    const i = setInterval(() => setPairs(prev => prev.map(tickPair)), 800)
-    return () => clearInterval(i)
-  }, [])
-
   // Scanner countdown + session refresh
   useEffect(() => {
     const i = setInterval(() => {
@@ -131,157 +139,92 @@ export default function TradeApp() {
   }, [scannerOn])
 
   const runScan = useCallback(async () => {
-    setScanning(true)
     const { settings } = aiSettings
     const useAI = settings.useAI && !!settings.apiKeys[settings.activeProvider]
+    if (!useAI) {
+      logEvent("config", "AI not configured — add an API key in Settings to enable scanning")
+      return
+    }
+
+    setScanning(true)
     const activePairs = pairs.filter(p => p.active)
     logEvent("scan", `Scan started — ${activePairs.length} pair${activePairs.length !== 1 ? "s" : ""}`)
 
-    if (useAI) {
-      const results = new Map<number, NonNullable<Pair["signal"]> | null>()
-      const latencies: number[] = []
+    const results = new Map<number, NonNullable<Pair["signal"]> | null>()
+    const latencies: number[] = []
 
-      await Promise.allSettled(
-        activePairs.map(async p => {
-          try {
-            const ctx = buildMarketContext(p)
-            const t0 = Date.now()
-            const res = await fetch("/api/ai/analyze", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                provider: settings.activeProvider,
-                model: settings.selectedModels[settings.activeProvider],
-                apiKey: settings.apiKeys[settings.activeProvider],
-                sym: p.sym, px: p.px, digits: p.digits, spread: p.spread,
-                history: p.history.slice(-50),
-                skillset, timeframe,
-                rsi: ctx.rsi, macdLine: ctx.macdLine, signalLine: ctx.signalLine,
-                histogram: ctx.histogram, bb: ctx.bb, trend: ctx.trend,
-                support: ctx.swings.support, resistance: ctx.swings.resistance,
-                activeSessions: ctx.activeSessions,
-                atr: ctx.atr, candlePatterns: ctx.candlePatterns, htf: ctx.htf,
-              }),
-            })
-            const lat = Date.now() - t0
-            latencies.push(lat)
-            if (!res.ok) { logEvent("ai", `${p.sym} · ${settings.activeProvider} error · ${lat}ms`); results.set(p.id, null); return }
-            const data = await res.json()
-            if (data.side === "NO TRADE" || data.confidence < threshold) {
-              logEvent("ai", `${p.sym} · NO TRADE · ${data.confidence}% conf · ${lat}ms`)
-              results.set(p.id, null)
-            } else {
-              logEvent("signal", `${p.sym} ${data.side} · conf ${data.confidence}% · ${lat}ms`)
-              results.set(p.id, {
-                side: data.side, confidence: data.confidence,
-                entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
-                rr: data.rr ?? "2.00", tf: timeframe, skillset,
-                why: data.reasoning, time: Date.now(),
-              })
-            }
-          } catch {
+    await Promise.allSettled(
+      activePairs.map(async p => {
+        try {
+          const ctx = buildMarketContext(p)
+          const t0 = Date.now()
+          const res = await fetch("/api/ai/analyze", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              provider: settings.activeProvider,
+              model: settings.selectedModels[settings.activeProvider],
+              apiKey: settings.apiKeys[settings.activeProvider],
+              sym: p.sym, px: p.px, digits: p.digits, spread: p.spread,
+              history: p.history.slice(-50),
+              skillset, timeframe,
+              rsi: ctx.rsi, macdLine: ctx.macdLine, signalLine: ctx.signalLine,
+              histogram: ctx.histogram, bb: ctx.bb, trend: ctx.trend,
+              support: ctx.swings.support, resistance: ctx.swings.resistance,
+              activeSessions: ctx.activeSessions,
+              atr: ctx.atr, candlePatterns: ctx.candlePatterns, htf: ctx.htf,
+            }),
+          })
+          const lat = Date.now() - t0
+          latencies.push(lat)
+          if (!res.ok) { logEvent("ai", `${p.sym} · ${settings.activeProvider} error · ${lat}ms`); results.set(p.id, null); return }
+          const data = await res.json()
+          if (data.side === "NO TRADE" || data.confidence < threshold) {
+            logEvent("ai", `${p.sym} · NO TRADE · ${data.confidence}% conf · ${lat}ms`)
             results.set(p.id, null)
+          } else {
+            logEvent("signal", `${p.sym} ${data.side} · conf ${data.confidence}% · ${lat}ms`)
+            results.set(p.id, {
+              side: data.side, confidence: data.confidence,
+              entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
+              rr: data.rr ?? "2.50", tf: timeframe, skillset,
+              why: data.reasoning, time: Date.now(),
+            })
           }
-        })
-      )
-
-      const avgLat = latencies.length ? Math.round(latencies.reduce((s, v) => s + v, 0) / latencies.length) : 0
-      let sigCount = 0
-
-      for (const [pairId, sig] of Array.from(results)) {
-        if (!sig) continue
-        sigCount++
-        const p = activePairs.find(ap => ap.id === pairId)!
-        setToast({ pair: p, signal: sig })
-        setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 200))
-        setUnread(u => u + 1)
-        notifSettings.sendSignal({ ...sig, sym: p.sym, digits: p.digits })
-      }
-
-      setPairs(prev => prev.map(p => {
-        if (!p.active) return p
-        const sig = results.get(p.id)
-        if (sig) return { ...p, status: "TRADE" as const, signal: sig, lastScan: Date.now(), confidence: sig.confidence }
-        return {
-          ...p, status: "NO TRADE" as const, signal: null, lastScan: Date.now(),
-          confidence: Math.floor(15 + Math.random() * 50),
-          reasoning: pick(REASONING_NO_TRADE)
-            .replace("{sym}", p.sym)
-            .replace("{h}", fmt(p.px + p.vol * 3, p.digits))
-            .replace("{l}", fmt(p.px - p.vol * 3, p.digits))
-            .replace("{entry}", fmt(p.px, p.digits)),
-          rsi: 30 + Math.random() * 40,
-          macd: (Math.random() - 0.5) * 0.5,
+        } catch {
+          results.set(p.id, null)
         }
-      }))
+      })
+    )
 
-      logEvent("scan", `Scan complete — ${sigCount} signal${sigCount !== 1 ? "s" : ""} · avg ${avgLat}ms`)
-      setMetrics(prev => ({ ...prev, scanCount: prev.scanCount + 1, signalCount: prev.signalCount + sigCount, lastAILatency: avgLat }))
-      setScanning(false)
-    } else {
-      // Pre-compute all signals so we can log them before setPairs
-      const results = new Map<number, NonNullable<Pair["signal"]> | null>()
-      for (const p of activePairs) {
-        const sig = makeSignal(p, skillset)
-        results.set(p.id, sig.confidence >= threshold ? sig : null)
-      }
-      const sigCount = Array.from(results.values()).filter(Boolean).length
+    const avgLat = latencies.length ? Math.round(latencies.reduce((s, v) => s + v, 0) / latencies.length) : 0
+    let sigCount = 0
 
-      setTimeout(() => {
-        for (const [pairId, sig] of Array.from(results)) {
-          if (!sig) continue
-          const p = activePairs.find(ap => ap.id === pairId)!
-          logEvent("signal", `${p.sym} ${sig.side} · conf ${sig.confidence}%`)
-          setToast({ pair: p, signal: sig })
-          setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 200))
-          setUnread(u => u + 1)
-          notifSettings.sendSignal({ ...sig, sym: p.sym, digits: p.digits })
-        }
-
-        setPairs(prev => prev.map(p => {
-          if (!p.active) return p
-          const sig = results.get(p.id)
-          if (sig) return { ...p, status: "TRADE" as const, signal: sig, lastScan: Date.now(), confidence: sig.confidence }
-          const noSig = makeSignal(p, skillset)
-          return {
-            ...p, status: "NO TRADE" as const, signal: null, lastScan: Date.now(),
-            confidence: noSig.confidence, reasoning: noSig.why,
-            rsi: p.rsi + (Math.random() - 0.5) * 2,
-            macd: p.macd + (Math.random() - 0.5) * 0.01,
-          }
-        }))
-
-        logEvent("scan", `Scan complete — ${sigCount} signal${sigCount !== 1 ? "s" : ""}`)
-        setMetrics(prev => ({ ...prev, scanCount: prev.scanCount + 1, signalCount: prev.signalCount + sigCount }))
-        setScanning(false)
-      }, 1700)
+    for (const [pairId, sig] of Array.from(results)) {
+      if (!sig) continue
+      sigCount++
+      const p = activePairs.find(ap => ap.id === pairId)!
+      setToast({ pair: p, signal: sig })
+      setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 200))
+      setUnread(u => u + 1)
+      notifSettings.sendSignal({ ...sig, sym: p.sym, digits: p.digits })
     }
+
+    setPairs(prev => prev.map(p => {
+      if (!p.active) return p
+      const sig = results.get(p.id)
+      if (sig) return { ...p, status: "TRADE" as const, signal: sig, lastScan: Date.now(), confidence: sig.confidence }
+      return { ...p, status: "NO TRADE" as const, signal: null, lastScan: Date.now(), confidence: 0, reasoning: "No high-probability setup — monitoring for next opportunity." }
+    }))
+
+    logEvent("scan", `Scan complete — ${sigCount} signal${sigCount !== 1 ? "s" : ""} · avg ${avgLat}ms`)
+    setMetrics(prev => ({ ...prev, scanCount: prev.scanCount + 1, signalCount: prev.signalCount + sigCount, lastAILatency: avgLat }))
+    setScanning(false)
   }, [skillset, threshold, timeframe, pairs, aiSettings, notifSettings, logEvent])
 
   useEffect(() => {
     if (secondsLeft === 0 && scannerOn) runScan()
   }, [secondsLeft, scannerOn, runScan])
-
-  // Seed XAU/USD signal on first load
-  useEffect(() => {
-    if (seededRef.current || pairs.length === 0) return
-    seededRef.current = true
-    const t = setTimeout(() => {
-      setPairs(prev => prev.map(p => {
-        if (p.sym !== "XAU/USD") return p
-        const sig = {
-          side: "SELL" as const, confidence: 82, rr: "3.20", tf: "H1",
-          entry: 2342.18, sl: 2358.40, tp1: 2310.50, tp2: 2284.20,
-          skillset: "Smart Money Concepts",
-          why: "XAU/USD swept liquidity above 2358 daily high then printed bearish BOS at 2342. Retest of breaker block active — sell with invalidation above 2358.40. Confluence: NY session open + USD strength.",
-          time: Date.now(),
-        }
-        setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h])
-        return { ...p, status: "TRADE" as const, signal: sig, confidence: 82, reasoning: sig.why, lastScan: Date.now() }
-      }))
-    }, 1200)
-    return () => clearTimeout(t)
-  }, [pairs.length])
 
   // ── Zone system ──────────────────────────────────────────────
 
@@ -295,56 +238,55 @@ export default function TradeApp() {
     return () => clearInterval(i)
   }, [pairs])
 
-  // Single-pair analysis triggered by zone entry
+  // Single-pair analysis triggered by zone entry or manual trigger
   const runPairScan = useCallback(async (p: Pair, triggerLabel: string) => {
     const { settings } = aiSettings
     const useAI = settings.useAI && !!settings.apiKeys[settings.activeProvider]
     const isManual = triggerLabel === "Manual"
+
+    if (!useAI) {
+      logEvent("config", `${p.sym} · AI not configured — add an API key in Settings`)
+      return
+    }
+
     logEvent(isManual ? "scan" : "zone", isManual ? `Manual analysis — ${p.sym}` : `Zone entry: ${p.sym} → ${triggerLabel}`)
 
     let sig: NonNullable<Pair["signal"]> | null = null
 
-    if (useAI) {
-      try {
-        const ctx = buildMarketContext(p)
-        const t0 = Date.now()
-        const res = await fetch("/api/ai/analyze", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            provider: settings.activeProvider,
-            model: settings.selectedModels[settings.activeProvider],
-            apiKey: settings.apiKeys[settings.activeProvider],
-            sym: p.sym, px: p.px, digits: p.digits, spread: p.spread,
-            history: p.history.slice(-50), skillset, timeframe,
-            rsi: ctx.rsi, macdLine: ctx.macdLine, signalLine: ctx.signalLine,
-            histogram: ctx.histogram, bb: ctx.bb, trend: ctx.trend,
-            support: ctx.swings.support, resistance: ctx.swings.resistance,
-            activeSessions: ctx.activeSessions,
-            atr: ctx.atr, candlePatterns: ctx.candlePatterns, htf: ctx.htf,
-          }),
-        })
-        const lat = Date.now() - t0
-        if (res.ok) {
-          const data = await res.json()
-          logEvent("ai", `${p.sym} · ${settings.activeProvider} · ${lat}ms`)
-          setMetrics(prev => ({ ...prev, lastAILatency: lat }))
-          if (data.side !== "NO TRADE" && data.confidence >= threshold) {
-            sig = {
-              side: data.side, confidence: data.confidence,
-              entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
-              rr: data.rr ?? "2.00", tf: timeframe, skillset,
-              why: `[${triggerLabel}] ${data.reasoning}`, time: Date.now(),
-            }
+    try {
+      const ctx = buildMarketContext(p)
+      const t0 = Date.now()
+      const res = await fetch("/api/ai/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: settings.activeProvider,
+          model: settings.selectedModels[settings.activeProvider],
+          apiKey: settings.apiKeys[settings.activeProvider],
+          sym: p.sym, px: p.px, digits: p.digits, spread: p.spread,
+          history: p.history.slice(-50), skillset, timeframe,
+          rsi: ctx.rsi, macdLine: ctx.macdLine, signalLine: ctx.signalLine,
+          histogram: ctx.histogram, bb: ctx.bb, trend: ctx.trend,
+          support: ctx.swings.support, resistance: ctx.swings.resistance,
+          activeSessions: ctx.activeSessions,
+          atr: ctx.atr, candlePatterns: ctx.candlePatterns, htf: ctx.htf,
+        }),
+      })
+      const lat = Date.now() - t0
+      if (res.ok) {
+        const data = await res.json()
+        logEvent("ai", `${p.sym} · ${settings.activeProvider} · ${lat}ms`)
+        setMetrics(prev => ({ ...prev, lastAILatency: lat }))
+        if (data.side !== "NO TRADE" && data.confidence >= threshold) {
+          sig = {
+            side: data.side, confidence: data.confidence,
+            entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
+            rr: data.rr ?? "2.50", tf: timeframe, skillset,
+            why: `[${triggerLabel}] ${data.reasoning}`, time: Date.now(),
           }
         }
-      } catch { /* silent */ }
-    } else {
-      const candidate = makeSignal(p, skillset)
-      if (candidate.confidence >= threshold) {
-        sig = { ...candidate, why: `[${triggerLabel}] ${candidate.why}` }
       }
-    }
+    } catch { /* silent */ }
 
     if (!sig) {
       logEvent("scan", `${p.sym} · NO TRADE`)
@@ -482,6 +424,7 @@ export default function TradeApp() {
               setThreshold={handleSetThreshold}
               scanning={scanning}
               onScanPair={() => runPairScan(selected, "Manual")}
+              aiConfigured={aiSettings.settings.useAI && !!aiSettings.settings.apiKeys[aiSettings.settings.activeProvider]}
             />
           </>
         )}

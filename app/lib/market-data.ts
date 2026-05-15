@@ -39,19 +39,6 @@ export const KNOWLEDGE: KnowledgeModule[] = [
   { key: "vol",  label: "Volume Profile",        on: false },
 ]
 
-const REASONING_NO_TRADE = [
-  "{sym} consolidating inside {h}/{l} range. Compression building, awaiting directional break.",
-  "{sym} showing mixed structure on H1. No clean liquidity sweep yet, monitoring for displacement.",
-  "{sym} sitting at mid-range. Insufficient confluence — waiting for session open to confirm bias.",
-  "{sym} respecting {h} resistance for now. No bearish BOS confirmed, no entry.",
-  "{sym} chopping under {h}. Order flow neutral, RSI flat, no edge.",
-]
-
-
-export function pick<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)]
-}
-
 export function fmt(px: number, digits: number): string {
   return px.toFixed(digits)
 }
@@ -297,176 +284,20 @@ export function buildMarketContext(p: Pair): MarketContext {
   return { rsi, macdLine, signalLine, histogram, bb, trend, swings, activeSessions: sessions, atr, candlePatterns, htf }
 }
 
-function seedHistory(px: number, vol: number, n = 220): OHLCBar[] {
-  const out: OHLCBar[] = []
-  const now = Math.floor(Date.now() / 1000)
-  let last = px
-  for (let i = n - 1; i >= 0; i--) {
-    const t = now - i * 60
-    const drift = (Math.random() - 0.5) * vol * 0.6
-    const open = last
-    const close = last + drift
-    const high = Math.max(open, close) + Math.random() * vol * 0.5
-    const low  = Math.min(open, close) - Math.random() * vol * 0.5
-    out.push({ time: t, open, high, low, close, volume: Math.random() * 1000 + 200 })
-    last = close
-  }
-  return out
-}
-
 export function buildInitialState(): Pair[] {
-  return PAIRS_SEED.map((p, i) => {
-    const history = seedHistory(p.px, p.vol)
-    const closes = history.map(b => b.close)
-    const rsi = calcRSI(closes)
-    const { macdLine } = calcMACD(closes)
-    return {
-      id: i,
-      ...p,
-      active: i < 8,
-      status: "NO TRADE" as const,
-      signal: null,
-      lastScan: Date.now() - Math.floor(Math.random() * 240000),
-      history,
-      reasoning: pick(REASONING_NO_TRADE)
-        .replace("{sym}", p.sym)
-        .replace("{h}", fmt(p.px + p.vol * 3, p.digits))
-        .replace("{l}", fmt(p.px - p.vol * 3, p.digits))
-        .replace("{entry}", fmt(p.px, p.digits)),
-      confidence: Math.floor(15 + Math.random() * 50),
-      rsi,
-      macd: macdLine,
-    }
-  })
-}
-
-export function tickPair(p: Pair): Pair {
-  const drift = (Math.random() - 0.499) * p.vol * 0.4
-  const newPx = Math.max(p.px * 0.8, p.px + drift)
-  const last = p.history[p.history.length - 1]
-  const now = Math.floor(Date.now() / 1000)
-  const updHistory = last && now - last.time < 60
-    ? [...p.history.slice(0, -1), {
-        ...last,
-        close: newPx,
-        high: Math.max(last.high, newPx),
-        low: Math.min(last.low, newPx),
-      }]
-    : [...p.history.slice(-219), {
-        time: now,
-        open: p.px,
-        high: Math.max(p.px, newPx),
-        low: Math.min(p.px, newPx),
-        close: newPx,
-        volume: Math.random() * 1000 + 200,
-      }]
-  return { ...p, px: newPx, history: updHistory }
-}
-
-export function makeSignal(p: Pair, skillset: string): Signal {
-  const ctx = buildMarketContext(p)
-  const { rsi, macdLine, signalLine, histogram, bb, trend, swings, atr, candlePatterns, htf } = ctx
-
-  let bullScore = 0, bearScore = 0
-  const bullReasons: string[] = []
-  const bearReasons: string[] = []
-
-  // ── H4 Trend (highest weight — trade WITH the higher TF) ─────
-  if (htf.trend === "UP")   { bullScore += 3; bullReasons.push(`H4 uptrend (RSI ${htf.rsi.toFixed(0)})`) }
-  if (htf.trend === "DOWN") { bearScore += 3; bearReasons.push(`H4 downtrend (RSI ${htf.rsi.toFixed(0)})`) }
-  // H4 RSI extremes add extra weight
-  if (htf.rsi < 35) { bullScore += 2; bullReasons.push(`H4 RSI oversold (${htf.rsi.toFixed(0)})`) }
-  if (htf.rsi > 65) { bearScore += 2; bearReasons.push(`H4 RSI overbought (${htf.rsi.toFixed(0)})`) }
-
-  // H4 key levels
-  const htfProx = p.px * 0.004
-  if (htf.support.length > 0 && Math.abs(p.px - htf.support[0]) < htfProx) {
-    bullScore += 2; bullReasons.push(`H4 support at ${fmt(htf.support[0], p.digits)}`)
-  }
-  if (htf.resistance.length > 0 && Math.abs(p.px - htf.resistance[0]) < htfProx) {
-    bearScore += 2; bearReasons.push(`H4 resistance at ${fmt(htf.resistance[0], p.digits)}`)
-  }
-
-  // ── H1 Indicators ────────────────────────────────────────────
-  if (rsi < 32) { bullScore += 2; bullReasons.push(`H1 RSI oversold (${rsi.toFixed(1)})`) }
-  else if (rsi < 42) { bullScore += 1 }
-  if (rsi > 68) { bearScore += 2; bearReasons.push(`H1 RSI overbought (${rsi.toFixed(1)})`) }
-  else if (rsi > 58) { bearScore += 1 }
-
-  if (macdLine > signalLine && histogram > 0) { bullScore += 2; bullReasons.push("MACD bullish crossover") }
-  else if (macdLine > 0) { bullScore += 1 }
-  if (macdLine < signalLine && histogram < 0) { bearScore += 2; bearReasons.push("MACD bearish crossover") }
-  else if (macdLine < 0) { bearScore += 1 }
-
-  if (trend === "UP")   { bullScore += 2; bullReasons.push("H1 EMA uptrend") }
-  if (trend === "DOWN") { bearScore += 2; bearReasons.push("H1 EMA downtrend") }
-
-  const bbWidth = bb.upper - bb.lower
-  if (bbWidth > 0) {
-    const pos = (p.px - bb.lower) / bbWidth
-    if (pos < 0.15) { bullScore += 2; bullReasons.push(`Price at lower BB ${fmt(bb.lower, p.digits)}`) }
-    else if (pos < 0.30) { bullScore += 1 }
-    if (pos > 0.85) { bearScore += 2; bearReasons.push(`Price at upper BB ${fmt(bb.upper, p.digits)}`) }
-    else if (pos > 0.70) { bearScore += 1 }
-  }
-
-  // H1 Key levels
-  const prox = p.px * 0.0025
-  if (swings.support[0] && Math.abs(p.px - swings.support[0]) < prox) {
-    bullScore += 2; bullReasons.push(`H1 support ${fmt(swings.support[0], p.digits)}`)
-  }
-  if (swings.resistance[0] && Math.abs(p.px - swings.resistance[0]) < prox) {
-    bearScore += 2; bearReasons.push(`H1 resistance ${fmt(swings.resistance[0], p.digits)}`)
-  }
-
-  // ── Candle Pattern Confirmation ───────────────────────────────
-  for (const cp of candlePatterns) {
-    if (cp.type === "bullish") { bullScore += cp.strength; bullReasons.push(cp.name) }
-    if (cp.type === "bearish") { bearScore += cp.strength; bearReasons.push(cp.name) }
-  }
-
-  // Session liquidity boost
-  if (ctx.activeSessions.length >= 2) { bullScore += 1; bearScore += 1 }
-
-  // ── Hard filter: contra-H4 trend kills the signal ────────────
-  const side: "BUY" | "SELL" = bullScore >= bearScore ? "BUY" : "SELL"
-  const contraTrend = (side === "BUY" && htf.trend === "DOWN") || (side === "SELL" && htf.trend === "UP")
-  const maxScore = Math.max(bullScore, bearScore)
-
-  // Require score ≥ 4, and if contra-H4 trend require score ≥ 8
-  const minRequired = contraTrend ? 8 : 4
-  if (maxScore < minRequired) {
-    return {
-      side: "BUY", entry: p.px, sl: p.px - atr * 1.5, tp1: p.px + atr * 2, tp2: p.px + atr * 3,
-      confidence: 20, rr: "2.00", tf: "H1", skillset,
-      why: `${p.sym} no trade — score ${maxScore}/${minRequired} required${contraTrend ? " (contra H4 trend)" : ""}.`,
-      time: Date.now(),
-    }
-  }
-
-  const reasons = side === "BUY" ? bullReasons : bearReasons
-
-  // ── ATR-based position sizing ─────────────────────────────────
-  // SL: 1.5×ATR beyond entry (tighter when score high)
-  const slAtrMult = maxScore >= 10 ? 1.2 : maxScore >= 7 ? 1.5 : 2.0
-  const rrNum = contraTrend ? 2.5 + Math.random() * 0.5 : 1.8 + Math.random() * 1.4
-  const slDist = atr * slAtrMult
-  const tpDist = slDist * rrNum
-  const entry = p.px
-  const sl  = side === "BUY" ? entry - slDist : entry + slDist
-  const tp1 = side === "BUY" ? entry + tpDist * 0.55 : entry - tpDist * 0.55
-  const tp2 = side === "BUY" ? entry + tpDist : entry - tpDist
-
-  // Confidence caps at 94; contra-H4 capped at 75
-  const rawConf = Math.floor(50 + maxScore * 3.5 + Math.random() * 5)
-  const confidence = Math.min(contraTrend ? 75 : 94, rawConf)
-
-  const sessionStr = ctx.activeSessions.length > 0 ? ctx.activeSessions.join("/") + " session" : "off-session"
-  const patternStr = candlePatterns.filter(cp => cp.type !== "neutral").map(cp => cp.name).join(", ")
-  const topReasons = reasons.slice(0, 3).join(" + ")
-  const why = `${p.sym} ${side} — ${topReasons}${patternStr ? ` + ${patternStr}` : ""}. ATR-based SL at ${fmt(sl, p.digits)}, target ${fmt(tp2, p.digits)} (1:${rrNum.toFixed(1)}). ${sessionStr}.`
-
-  return { side, entry, sl, tp1, tp2, confidence, rr: rrNum.toFixed(2), tf: "H1", skillset, why, time: Date.now() }
+  return PAIRS_SEED.map((p, i) => ({
+    id: i,
+    ...p,
+    active: i < 8,
+    status: "NO TRADE" as const,
+    signal: null,
+    lastScan: 0,
+    history: [],
+    reasoning: "Waiting for market data…",
+    confidence: 0,
+    rsi: 50,
+    macd: 0,
+  }))
 }
 
 export function activeSessions(): Session[] {
@@ -569,37 +400,3 @@ export function aggregatePerformance(history: HistoryEntry[]): PerfData {
   }
 }
 
-export function generateHistory(pairs: Pair[], days = 14): HistoryEntry[] {
-  const out: HistoryEntry[] = []
-  const now = Date.now()
-  const skillsets = SKILLSETS
-  let id = 1
-  for (let d = days; d >= 0; d--) {
-    const count = 3 + Math.floor(Math.random() * 5)
-    for (let i = 0; i < count; i++) {
-      const p = pairs[Math.floor(Math.random() * pairs.length)]
-      const side = Math.random() > 0.5 ? "BUY" : "SELL"
-      const slDist = p.vol * (2 + Math.random() * 3)
-      const rrNum = 1.5 + Math.random() * 2.5
-      const entry = p.px * (1 + (Math.random() - 0.5) * 0.002)
-      const sl    = side === "BUY" ? entry - slDist : entry + slDist
-      const tp1   = side === "BUY" ? entry + slDist * rrNum * 0.6 : entry - slDist * rrNum * 0.6
-      const tp2   = side === "BUY" ? entry + slDist * rrNum : entry - slDist * rrNum
-      const won   = Math.random() < 0.58
-      const pnl_r = won ? rrNum * (0.6 + Math.random() * 0.8) : -(0.6 + Math.random() * 0.4)
-      const state = won ? (Math.random() > 0.4 ? "TP2" : "TP1") : "SL"
-      out.push({
-        id: id++,
-        sym: p.sym, digits: p.digits,
-        side, confidence: Math.floor(60 + Math.random() * 35),
-        entry, sl, tp1, tp2,
-        rr: rrNum.toFixed(2), tf: "H1",
-        skillset: skillsets[Math.floor(Math.random() * skillsets.length)],
-        why: `${p.sym} ${side} signal — ${won ? "target reached" : "stopped out"}.`,
-        time: now - d * 86400000 - Math.random() * 86400000,
-        state, pnl_r,
-      })
-    }
-  }
-  return out.sort((a, b) => b.time - a.time)
-}
