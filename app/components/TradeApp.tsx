@@ -6,11 +6,11 @@ import LeftSidebar from "./layout/LeftSidebar"
 import ChartPanel from "./chart/ChartPanel"
 import AIPanel from "./panels/AIPanel"
 import Toast from "./panels/Toast"
+import MultiChartView from "./views/MultiChartView"
 import type { Pair, HistoryEntry, KnowledgeModule, ViewId, Timeframe } from "@/app/lib/types"
 import {
   buildInitialState, tickPair, makeSignal, KNOWLEDGE,
-  activeSessions, pick,
-  fmt,
+  activeSessions, pick, fmt,
 } from "@/app/lib/market-data"
 
 const REASONING_NO_TRADE = [
@@ -38,18 +38,13 @@ export default function TradeApp() {
   const [unread, setUnread] = useState(0)
   const seededRef = useRef(false)
 
-  // Init
-  useEffect(() => {
-    setPairs(buildInitialState())
-  }, [])
+  useEffect(() => { setPairs(buildInitialState()) }, [])
 
-  // Tick prices every 800ms
   useEffect(() => {
     const i = setInterval(() => setPairs(prev => prev.map(tickPair)), 800)
     return () => clearInterval(i)
   }, [])
 
-  // Countdown + session update
   useEffect(() => {
     const i = setInterval(() => {
       setSecondsLeft(s => scannerOn ? (s > 0 ? s - 1 : 300) : s)
@@ -102,7 +97,6 @@ export default function TradeApp() {
     if (secondsLeft === 0 && scannerOn) runScan()
   }, [secondsLeft, scannerOn, runScan])
 
-  // Seed XAU/USD signal on load
   useEffect(() => {
     if (seededRef.current || pairs.length === 0) return
     seededRef.current = true
@@ -129,13 +123,22 @@ export default function TradeApp() {
   const onToggleActive = (id: number) =>
     setPairs(prev => prev.map(p => p.id === id ? { ...p, active: !p.active } : p))
 
+  // When a mini-chart card is clicked, jump to dashboard/chart view for that pair
+  const handleOpenPair = (id: number) => {
+    setSelectedId(id)
+    setView("dashboard")
+  }
+
   const selected = pairs.find(p => p.id === selectedId) ?? pairs[0]
 
   if (!selected) return (
     <div className="flex items-center justify-center h-screen bg-ink-950">
-      <div className="w-8 h-8 border-2 border-white/10 border-t-accent-blue rounded-full animate-spin"/>
+      <div className="w-8 h-8 border-2 border-white/10 border-t-accent-blue rounded-full animate-spin" />
     </div>
   )
+
+  // Views that replace the chart+ai panel layout
+  const isFullView = view === "multichart" || view === "heatmap" || view === "performance" || view === "journal" || view === "replay" || view === "system"
 
   return (
     <div className="flex flex-col h-screen bg-ink-950 overflow-hidden">
@@ -148,36 +151,76 @@ export default function TradeApp() {
       />
 
       <div className="flex flex-1 min-h-0">
-        <NavRail view={view} setView={v => { setView(v); setUnread(0) }} badges={{ journal: unread }} />
+        <NavRail
+          view={view}
+          setView={v => { setView(v); if (v === "journal") setUnread(0) }}
+          badges={{ journal: unread }}
+        />
+
+        {/* Sidebar always visible */}
         <LeftSidebar
           pairs={pairs}
           selectedId={selectedId}
-          onSelect={setSelectedId}
+          onSelect={id => { setSelectedId(id); if (isFullView) setView("dashboard") }}
           onToggleActive={onToggleActive}
           secondsLeft={secondsLeft}
           scanning={scanning}
           scannerOn={scannerOn}
         />
-        <ChartPanel pair={selected} timeframe={timeframe} setTimeframe={setTimeframe} />
-        <AIPanel
-          pair={selected}
-          skillset={skillset}
-          setSkillset={setSkillset}
-          knowledge={knowledge}
-          toggleKnowledge={toggleKnowledge}
-          history={history}
-          threshold={threshold}
-          setThreshold={setThreshold}
-          scanning={scanning}
-        />
+
+        {/* Main content area */}
+        {view === "dashboard" && (
+          <>
+            <ChartPanel pair={selected} timeframe={timeframe} setTimeframe={setTimeframe} />
+            <AIPanel
+              pair={selected}
+              skillset={skillset}
+              setSkillset={setSkillset}
+              knowledge={knowledge}
+              toggleKnowledge={toggleKnowledge}
+              history={history}
+              threshold={threshold}
+              setThreshold={setThreshold}
+              scanning={scanning}
+            />
+          </>
+        )}
+
+        {view === "multichart" && (
+          <MultiChartView pairs={pairs} onOpen={handleOpenPair} />
+        )}
+
+        {/* Placeholder views for future implementation */}
+        {(view === "heatmap" || view === "performance" || view === "journal" || view === "replay" || view === "system") && (
+          <ComingSoon view={view} />
+        )}
       </div>
 
       <Toast
         signal={toast?.signal ?? null}
         pair={toast?.pair ?? null}
         onDismiss={() => setToast(null)}
-        onView={() => { if (toast) { setSelectedId(toast.pair.id); setToast(null) } }}
+        onView={() => { if (toast) { setSelectedId(toast.pair.id); setView("dashboard"); setToast(null) } }}
       />
+    </div>
+  )
+}
+
+function ComingSoon({ view }: { view: ViewId }) {
+  const labels: Record<string, string> = {
+    heatmap: "Market Heatmap",
+    performance: "Performance",
+    journal: "Signal Journal",
+    replay: "Chart Replay",
+    system: "System Status",
+  }
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center gap-4 text-mute">
+      <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" strokeWidth="1" opacity="0.3">
+        <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+      </svg>
+      <div className="text-[15px] text-white/50 font-medium">{labels[view]}</div>
+      <div className="text-[12px]">Coming soon — next in development queue</div>
     </div>
   )
 }
