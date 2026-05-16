@@ -79,68 +79,88 @@ interface SignalResult {
 
 // ── System Prompt ──────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are an elite institutional trading analyst. You identify ONLY the highest-probability Smart Money setups. Expect to output NO TRADE the vast majority of the time — false negatives cost nothing; false positives cost capital.
+const SYSTEM_PROMPT = `You are an elite institutional trading desk analyst. Your mandate is simple: identify ONLY the highest-probability Smart Money setups that a professional prop trader would stake real capital on. You will output NO TRADE the overwhelming majority of the time. Precision over frequency — one A+ signal per week beats 20 mediocre ones.
 
-## CORE FRAMEWORK: SMART MONEY CONCEPTS
+## ABSOLUTE PREREQUISITES — ALL must be true or the answer is NO TRADE
 
-### Step 1 — H4 Structure Bias (ABSOLUTE FILTER)
-The H4 trend direction is non-negotiable. Never trade against it except in extreme reversal conditions:
-- H4 BULLISH → BUY setups only (pullbacks to unmitigated OBs in discount zone)
-- H4 BEARISH → SELL setups only (rallies to unmitigated OBs in premium zone)
-- H4 RANGING + H1 RANGING → NO TRADE (no edge)
+**P1 — Session (hard gate, no exceptions):**
+Active London session (08:00-17:00 UTC) OR active New York session (13:00-22:00 UTC). Outside these windows, institutional liquidity is insufficient. Return NO TRADE immediately without further analysis.
 
-### Step 2 — H1 SMC Setup (need ALL of these for a signal)
-A. **Market Structure Aligned**: H1 bias must match H4 direction
-B. **Price in Correct Zone**:
-   - BUY: price in DISCOUNT zone (below 50% of recent swing range) or at OTE (62-79% retracement)
-   - SELL: price in PREMIUM zone (above 50% of recent swing range) or at OTE
-C. **Price at a Key Level** (ONE of these, prioritized in order):
-   1. Unmitigated Order Block: price trading into an unmitigated OB aligned with bias (strength 2-3 preferred)
-   2. Unfilled Fair Value Gap: price entering an unfilled FVG in the bias direction
-   3. Major S/R confluence: price at a well-defined swing level confirmed by BB extreme
-D. **Liquidity Sweep** (HIGHEST QUALITY — auto-elevates confidence by 10 points):
-   - Sell-side sweep (bull): price wicked BELOW equal lows then closed above → smart money grabbed sell stops, now expect BUY
-   - Buy-side sweep (bear): price wicked ABOVE equal highs then closed below → smart money grabbed buy stops, now expect SELL
-   - Sweep within last 5 bars + OB/FVG alignment = near-perfect setup
-E. **Daily Context**:
-   - D1 bias (UP/DOWN/NEUTRAL) adds a 3rd TF layer — strongest signals have D1+H4+H1 all aligned
-   - PDH (previous day high) and PDL (previous day low) are institutional levels — price reaction at these is significant
-   - D1 order blocks carry the most weight of all — if price is at a D1 OB aligned with H4+H1, that's the elite setup
+**P2 — 3-Timeframe Alignment:**
+D1 bias, H4 structure, and H1 structure must all point in the same direction. Two out of three is acceptable ONLY if the dissenting TF is NEUTRAL (not opposing). A fully opposing TF = NO TRADE.
 
-### Step 3 — Classical Confirmation (2+ of these)
-- RSI extreme: <32 for BUY, >68 for SELL
-- RSI divergence at key level: bullish div at support (price LL, RSI HL) or bearish div at resistance (price HH, RSI LH) = very strong confirmation
-- MACD confirmed crossover in signal direction
-- Candle pattern at the entry level (strength 2-3: Engulfing, Pin Bar, Hammer, Morning/Evening Star)
-- Active London or New York session (required for acceptable liquidity)
+**P3 — Price at an Institutional Level:**
+Price must be within 0.3×ATR of one of these levels (in priority order):
+  1. D1 Order Block (strongest — where large banks positioned)
+  2. H4 Order Block (strong — high timeframe institutional interest)
+  3. H1 Order Block (entry-grade — confirmed unmitigated)
+  4. Unfilled Fair Value Gap (imbalance that must be corrected)
+  NOT at a level = NO TRADE. Price chasing = NO TRADE.
 
-### Step 4 — Trade Construction
-- Entry: at the OB/FVG/level (not chasing — if already overextended >0.3×ATR from level, NO TRADE)
-- SL: below the OB low (BUY) or above the OB high (SELL), minimum 1.5×ATR distance
-- TP1: 55% of full TP2 distance
-- TP2: minimum 1:2.5 RR — if not achievable at next structural level, NO TRADE
+**P4 — Correct Market Zone:**
+- BUY: price must be in DISCOUNT zone (<50% of swing range) or OTE (62-79% retracement)
+- SELL: price must be in PREMIUM zone (>50% of swing range) or OTE
+Price at equilibrium (45-55%) with no OB/FVG = NO TRADE.
 
-## INSTANT NO TRADE conditions:
-- H4 contradicts setup (no exception unless RSI > 76 / < 24 AND strong reversal pattern)
-- H1 structure and H4 structure disagree
-- No unmitigated OB, unfilled FVG, or major S/R level nearby (within 0.5×ATR)
-- Price in equilibrium zone (45-55%) with no OB/FVG
-- RSI 38-62 AND MACD flat (no momentum)
-- No active London or New York session
-- Spread > 0.07% of price
-- TP2 achieves less than 1:2.5 RR
+**P5 — Candle Confirmation (required, not optional):**
+A reversal candle pattern at the level is mandatory for signal issuance:
+- Strength 3 (A+): Bullish/Bearish Engulfing, Morning/Evening Star, Three Soldiers/Crows
+- Strength 2 (A): Hammer, Shooting Star, Pin Bar, Doji with strong wick rejection
+- Strength 1: Not sufficient on its own — needs sweep or divergence as substitute
+No candle confirmation at the level = downgrade confidence by 15 points minimum.
 
-## OUTPUT — strict JSON only:
+## SIGNAL QUALITY TIERS
+
+### A+ SETUP — confidence 90-95 (take every time):
+✓ D1 + H4 + H1 all aligned
+✓ Fresh liquidity sweep within last 5 bars (stop hunt → reversal)
+✓ Price at D1 or H4 OB in OTE zone (62-79% retracement)
+✓ Strength-3 candle pattern at the level
+✓ RSI divergence OR RSI extreme (<30 / >70)
+✓ Active London-NY overlap (13:00-17:00 UTC) — highest volume
+✓ RR ≥ 1:3.5
+
+### A SETUP — confidence 83-89 (take if spread acceptable):
+✓ H4 + H1 aligned (D1 neutral acceptable)
+✓ Price at H4 or H1 OB (unmitigated, strength 2-3)
+✓ Strength-2+ candle pattern at level
+✓ RSI extreme OR MACD crossover confirmed
+✓ Active London or NY session
+✓ RR ≥ 1:3.0
+
+### B SETUP — confidence 75-82 (marginal — tighten sizing):
+✓ H4 + H1 aligned
+✓ Price at H1 OB or unfilled FVG
+✓ Any candle confirmation
+✓ One classical indicator confirmation
+✓ Active session
+✓ RR ≥ 1:2.8
+→ Only issue B setups if the data is exceptionally clean. When in doubt, NO TRADE.
+
+## TRADE CONSTRUCTION RULES
+- Entry: at the OB midpoint or FVG midpoint — NEVER above/below the level
+- SL: 1 pip below the OB low (BUY) or 1 pip above the OB high (SELL); minimum 1.5×ATR distance
+- TP1: exactly 55% of the distance from entry to TP2
+- TP2: next major structural level (swing high/low, PDH/PDL, weekly level) — minimum 1:3.0 RR; if not achievable = NO TRADE
+- Spread check: if spread > 0.08% of price → NO TRADE (execution slippage kills the edge)
+
+## LIQUIDITY SWEEP BONUS
+A sweep within the last 5 bars where price wicked through a key level and reversed closes:
+- Sell-side sweep (equal lows broken, close above) → BUY signal potential — confidence +12 points
+- Buy-side sweep (equal highs broken, close below) → SELL signal potential — confidence +12 points
+Sweep + OB + candle = the highest-quality setup possible. Prioritize these above all.
+
+## OUTPUT — strict JSON only, no markdown, no explanation outside the JSON:
 {
   "side": "BUY" | "SELL" | "NO TRADE",
-  "confidence": <integer 0-100: 85+ = 4+ confluences + H4+D1 alignment + OB/FVG entry + session; 90+ = liquidity sweep + OTE + candle pattern + RSI divergence>,
-  "entry": <number>,
-  "sl": <number — below OB low for BUY / above OB high for SELL>,
+  "confidence": <integer 0-100>,
+  "entry": <number — OB/FVG midpoint>,
+  "sl": <number — beyond OB extreme, min 1.5×ATR>,
   "tp1": <number — 55% of TP2 distance>,
-  "tp2": <number — next structural target, min 1:2.5 RR>,
-  "rr": "<string e.g. '2.80'>",
-  "confluences": ["H4 BULLISH structure", "H1 BULLISH BOS", "Discount zone", "Bull OB 1.0842-1.0855 unmitigated", "RSI 28 oversold", "London session", "Bullish Engulfing at OB"],
-  "reasoning": "<4 sentences: (1) H4+H1 structure context, (2) exact OB/FVG level and why it's valid, (3) liquidity context + candle confirmation, (4) exact SL placement and TP2 structural target>"
+  "tp2": <number — structural target, min 1:3.0 RR>,
+  "rr": "<string e.g. '3.20'>",
+  "confluences": [<list every met condition: structure, zone, OB/FVG details, sweep, candle pattern, RSI, session>],
+  "reasoning": "<exactly 4 sentences: (1) D1+H4+H1 structure alignment verdict, (2) exact OB/FVG level being traded and why it is valid/unmitigated, (3) liquidity context — sweep or lack thereof — plus candle pattern name and what it signals, (4) SL placement rationale and TP2 structural target with RR>"
 }`
 
 // ── User Prompt Builder ────────────────────────────────────────
@@ -223,72 +243,70 @@ function buildPrompt(r: AnalyzeRequest): string {
   return `=== INSTRUMENT ===
 Symbol:        ${r.sym}
 Current Price: ${r.px.toFixed(d)}
-Spread:        ${r.spread} (${spreadPct}% of price)
+Spread:        ${r.spread} (${spreadPct}% of price)${parseFloat(spreadPct) > 0.08 ? " ← SPREAD TOO HIGH → NO TRADE" : ""}
 Strategy:      ${r.skillset}
 
-=== SESSIONS ===
-Active: ${sessionStr}
+=== GATE CHECK (answer these first — any NO = return NO TRADE immediately) ===
+G1 Session: ${sessionStr} — London (08-17 UTC) or NY (13-22 UTC) required. Currently: ${sessionStr.includes("London") || sessionStr.includes("New York") ? "✓ PASS" : "✗ FAIL → NO TRADE"}
+G2 Alignment: D1=${daily?.d1Bias ?? "N/A"}, H4=${r.htf.trend}, H1=${struct.bias} — need 3/3 aligned or 2/3 with neutral dissenter.
+G3 Spread: ${spreadPct}% — must be <0.08%. ${parseFloat(spreadPct) > 0.08 ? "✗ FAIL → NO TRADE" : "✓ PASS"}
 
-=== H4 STRUCTURE (PRIMARY FILTER) ===
-H4 Trend:      ${r.htf.trend} <- ONLY trade this direction
-H4 RSI:        ${r.htf.rsi.toFixed(1)} (${htfRsiLabel})
-H4 Resistance: ${r.htf.resistance.length > 0 ? r.htf.resistance.map(l => l.toFixed(d)).join(" | ") : "None"}
-H4 Support:    ${r.htf.support.length > 0 ? r.htf.support.map(l => l.toFixed(d)).join(" | ") : "None"}
-
-=== DAILY CONTEXT (D1 bias — 3rd TF layer) ===
-D1 Bias:      ${daily?.d1Bias ?? "N/A"} (3-day close direction)
-PDH:          ${daily?.pdHigh?.toFixed(d) ?? "N/A"} (previous day high — institutional resistance)
-PDL:          ${daily?.pdLow?.toFixed(d) ?? "N/A"} (previous day low — institutional support)
-Weekly Range: ${daily?.weekLow?.toFixed(d) ?? "N/A"} → ${daily?.weekHigh?.toFixed(d) ?? "N/A"}
-D1 Order Blocks (highest priority — strongest levels):
+=== DAILY CONTEXT (D1 — highest TF, institutional positioning) ===
+D1 Bias:      ${daily?.d1Bias ?? "N/A"} (3-day direction of closes)
+PDH:          ${daily?.pdHigh?.toFixed(d) ?? "N/A"} ← previous day high (institutional resistance / BSL)
+PDL:          ${daily?.pdLow?.toFixed(d) ?? "N/A"} ← previous day low (institutional support / SSL)
+Weekly Range: ${daily?.weekLow?.toFixed(d) ?? "N/A"} – ${daily?.weekHigh?.toFixed(d) ?? "N/A"}
+D1 Order Blocks (highest-weight levels — price reacts to these for days):
 ${d1ObLines}
 
-=== LIQUIDITY SWEEPS (stop hunts — highest quality setups) ===
+=== LIQUIDITY SWEEPS — highest quality setup trigger ===
 ${sweepLines}
 
 === RSI DIVERGENCE ===
 ${divLine}
 
-=== H1 SMART MONEY ANALYSIS ===
-Structure Bias: ${struct.bias}
-Price Zone:     ${struct.zone}${struct.inOTE ? " * OTE ZONE" : ""} (${pos}% of swing range)
-Swing Range:    ${struct.recentSwingLow.toFixed(d)} -> ${struct.recentSwingHigh.toFixed(d)}
-Last BOS/CHoCH: ${lastBOSStr}
-
-H4 Order Blocks (strong — use as primary entry zone):
+=== H4 STRUCTURE ===
+H4 Trend:      ${r.htf.trend} ← primary direction filter
+H4 RSI:        ${r.htf.rsi.toFixed(1)} (${htfRsiLabel})
+H4 Resistance: ${r.htf.resistance.length > 0 ? r.htf.resistance.map(l => l.toFixed(d)).join(" | ") : "None"}
+H4 Support:    ${r.htf.support.length > 0 ? r.htf.support.map(l => l.toFixed(d)).join(" | ") : "None"}
+H4 Order Blocks (strong entry zones — institutional interest):
 ${h4ObLines}
+
+=== H1 SMART MONEY ANALYSIS ===
+Structure:  ${struct.bias} | Zone: ${struct.zone}${struct.inOTE ? " ★ OTE ZONE" : ""} (${pos}% of swing range ${struct.recentSwingLow.toFixed(d)} → ${struct.recentSwingHigh.toFixed(d)})
+Last Break: ${lastBOSStr}
 
 H1 Order Blocks (unmitigated, nearest first):
 ${obLines}
 
-Fair Value Gaps (unfilled, nearest first):
+Fair Value Gaps (unfilled):
 ${fvgLines}
 
-Liquidity Levels (nearest first):
+Liquidity Pools:
 ${liqLines}
 
-=== H1 CLASSICAL INDICATORS ===
-RSI(14):       ${r.rsi.toFixed(1)} -> ${rsiLabel}
-MACD(12,26,9): Line ${r.macdLine.toFixed(d + 1)} | Signal ${r.signalLine.toFixed(d + 1)} | Hist ${r.histogram.toFixed(d + 1)} -> ${macdDir}
-BB(20,2):      Upper ${r.bb.upper.toFixed(d)} | Mid ${r.bb.mid.toFixed(d)} | Lower ${r.bb.lower.toFixed(d)} | Pos ${bbPos}% -> ${bbLabel}
-EMA Trend:     ${r.trend} (EMA20 vs EMA50)
-ATR(14):       ${r.atr.toFixed(d)} | 1.5xATR: ${atrSL}
+=== H1 INDICATORS ===
+RSI(14):   ${r.rsi.toFixed(1)} → ${rsiLabel}
+MACD:      Line ${r.macdLine.toFixed(d + 1)} | Signal ${r.signalLine.toFixed(d + 1)} | Hist ${r.histogram.toFixed(d + 1)} → ${macdDir}
+BB(20,2):  Upper ${r.bb.upper.toFixed(d)} Mid ${r.bb.mid.toFixed(d)} Lower ${r.bb.lower.toFixed(d)} | ${bbPos}% position → ${bbLabel}
+EMA Trend: ${r.trend} | ATR(14): ${r.atr.toFixed(d)} | 1.5×ATR SL: ${atrSL}
 
-=== CANDLE PATTERNS (last 5 bars) ===
+=== CANDLE PATTERNS (last 5 bars — confirmation required) ===
 ${patternStr}
 
-=== RECENT OHLCV (last 15 H1 bars) ===
+=== RECENT OHLCV (last 15 H1 bars, newest last) ===
 ${ohlcv}
 
-=== TASK ===
-1. D1+H4+H1 alignment: D1 bias=${daily?.d1Bias ?? "N/A"}, H4=${r.htf.trend}, H1=${struct.bias}. All three should agree for highest quality. Two out of three minimum.
-2. Liquidity sweep present? ${smc.sweeps?.length > 0 ? `YES — ${smc.sweeps[0].type.toUpperCase()} sweep ${smc.sweeps[0].barsAgo} bars ago. Check for reversal setup in ${smc.sweeps[0].type === "bull" ? "BUY" : "SELL"} direction.` : "None — look for OB/FVG confluence instead."}
-3. Is price at a key level? Priority: D1 OB > H4 OB > H1 OB > FVG > S/R. If not within 0.3×ATR of any level -> NO TRADE.
-4. Zone check: DISCOUNT for BUY, PREMIUM for SELL. Mid-range without OB/FVG -> NO TRADE.
-5. RSI divergence: ${smc.divergence ? `${smc.divergence.type.toUpperCase()} divergence detected — adds strong confirmation` : "None — rely on RSI extreme or MACD crossover"}.
-6. Are 2+ classical confirmations present? (RSI extreme, MACD crossover, candle pattern, active session)
-7. Does TP2 achieve >=1:2.5 RR at the next structural level? PDH=${daily?.pdHigh?.toFixed(d) ?? "N/A"}, PDL=${daily?.pdLow?.toFixed(d) ?? "N/A"} are valid TP targets.
-8. Only output a signal if conditions pass. A sweep + aligned OB + session + candle pattern = elite signal (confidence 88+). When in doubt -> NO TRADE.`
+=== DECISION CHECKLIST — work through in order, stop at first failure ===
+STEP 1 — Session gate: Is London or NY active? ${sessionStr.includes("London") || sessionStr.includes("New York") ? "YES → continue" : "NO → output NO TRADE, stop here."}
+STEP 2 — Alignment: Are D1+H4+H1 aligned (or 2/3 with neutral)? State which direction or conflict.
+STEP 3 — Level: Is price within 0.3×ATR (${(r.atr * 0.3).toFixed(d)}) of a D1 OB, H4 OB, H1 OB, or FVG? If no level nearby → NO TRADE.
+STEP 4 — Zone: DISCOUNT for BUY, PREMIUM for SELL. OTE zone is ideal. Mid-range without OB/FVG → NO TRADE.
+STEP 5 — Sweep: ${smc.sweeps?.length > 0 ? `SWEEP DETECTED — ${smc.sweeps[0].type.toUpperCase()} sweep ${smc.sweeps[0].barsAgo} bars ago → +12 confidence if aligns with trade direction.` : "No sweep — check OB/FVG carefully."}
+STEP 6 — Candle: Is there a strength-2+ reversal pattern at the level? ${patterns.length > 0 ? `YES: ${patternStr}` : "NO — reduce confidence by 15 if issuing a signal."}
+STEP 7 — RR: Can TP2 reach at least 1:3.0 at the next structural level (PDH=${daily?.pdHigh?.toFixed(d) ?? "N/A"}, PDL=${daily?.pdLow?.toFixed(d) ?? "N/A"}, weekly H/L)? If RR < 3.0 → NO TRADE.
+STEP 8 — Final verdict: Signal only if steps 1-7 all pass. Elite setup (A+) = sweep + aligned OB + candle + RSI extreme → confidence 90+. Standard (A) = OB + candle + session → confidence 83-89. When any doubt exists → NO TRADE.`
 }
 
 // ── JSON extraction helper ─────────────────────────────────────

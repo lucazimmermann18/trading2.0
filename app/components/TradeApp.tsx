@@ -36,7 +36,7 @@ export default function TradeApp() {
   const [selectedId, setSelectedId] = useState(7) // XAU/USD
   const [timeframe, setTimeframe] = useState<Timeframe>("H1")
   const [skillset, setSkillset] = useState("Smart Money Concepts")
-  const [threshold, setThreshold] = useState(75)
+  const [threshold, setThreshold] = useState(82)
   const [scannerOn, setScannerOn] = useState(true)
   const persistedAppliedRef = useRef(false)
   const [secondsLeft, setSecondsLeft] = useState(272)
@@ -189,13 +189,23 @@ export default function TradeApp() {
     }
 
     setScanning(true)
+
+    // Session gate: skip scan entirely if outside London / New York hours
+    const activeSess = activeSessions()
+    const sessionActive = activeSess.some(s => (s.key === "london" || s.key === "ny") && s.active)
+    if (!sessionActive) {
+      logEvent("scan", "Scan skipped — outside London/NY session (low liquidity)")
+      setScanning(false)
+      return
+    }
+
     const activePairs = pairs.filter(p => p.active && p.history.length >= 50)
     if (!activePairs.length) {
       logEvent("feed", "Scan skipped — waiting for market data to finish loading")
       setScanning(false)
       return
     }
-    logEvent("scan", `Scan started — ${activePairs.length} pair${activePairs.length !== 1 ? "s" : ""}`)
+    logEvent("scan", `Scan started — ${activePairs.length} pairs · ${activeSess.filter(s => s.active).map(s => s.label).join("+")} session`)
 
     const results = new Map<number, NonNullable<Pair["signal"]> | null>()
     const latencies: number[] = []
@@ -204,6 +214,28 @@ export default function TradeApp() {
       activePairs.map(async p => {
         try {
           const ctx = buildMarketContext(p)
+
+          // Client-side pre-filter: skip if spread > 0.08% (execution slippage kills edge)
+          const spreadPct = (p.spread / p.px) * 100
+          if (spreadPct > 0.08) {
+            logEvent("scan", `${p.sym} · skipped — spread ${spreadPct.toFixed(3)}% too wide`)
+            results.set(p.id, null)
+            return
+          }
+
+          // Client-side pre-filter: skip if price not near any SMC level
+          const atr = ctx.atr
+          const px = p.px
+          const nearOB = ctx.smc.orderBlocks.some(ob => px >= ob.low - atr * 0.4 && px <= ob.high + atr * 0.4)
+          const nearH4OB = ctx.smc.h4OrderBlocks.some(ob => px >= ob.low - atr * 0.5 && px <= ob.high + atr * 0.5)
+          const nearFVG = ctx.smc.fvgs.some(fvg => px >= fvg.bottom - atr * 0.3 && px <= fvg.top + atr * 0.3)
+          const hasSweep = ctx.smc.sweeps.length > 0
+          if (!nearOB && !nearH4OB && !nearFVG && !hasSweep) {
+            logEvent("scan", `${p.sym} · skipped — price not near any OB/FVG/sweep`)
+            results.set(p.id, null)
+            return
+          }
+
           const t0 = Date.now()
           const res = await fetch("/api/ai/analyze", {
             method: "POST",
@@ -236,7 +268,7 @@ export default function TradeApp() {
             results.set(p.id, {
               side: data.side, confidence: data.confidence,
               entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
-              rr: data.rr ?? "2.50", tf: timeframe, skillset,
+              rr: data.rr ?? "3.00", tf: timeframe, skillset,
               why: data.reasoning, time: now,
               expiresAt: now + (SIGNAL_EXPIRY_MS[timeframe] ?? SIGNAL_EXPIRY_MS.H1),
               confluences: buildConfluences(ctx.smc, data.side),
@@ -339,7 +371,7 @@ export default function TradeApp() {
           sig = {
             side: data.side, confidence: data.confidence,
             entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
-            rr: data.rr ?? "2.50", tf: timeframe, skillset,
+            rr: data.rr ?? "3.00", tf: timeframe, skillset,
             why: `[${triggerLabel}] ${data.reasoning}`, time: now,
             expiresAt: now + (SIGNAL_EXPIRY_MS[timeframe] ?? SIGNAL_EXPIRY_MS.H1),
             confluences: buildConfluences(ctx.smc, data.side),

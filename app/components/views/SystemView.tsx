@@ -76,7 +76,7 @@ export default function SystemView({ auditLog, metrics, wsConnected, activePairs
     {
       name: "Twelve Data WS",
       status: (wsConnected ? "ok" : "error") as "ok" | "stale" | "error",
-      latency: wsConnected ? 28 + Math.floor(Math.sin(tick) * 8) : 0,
+      latency: 0,
       msgsPerMin: wsConnected ? activePairs * 75 : 0,
       note: wsConnected ? "Live price ticks" : "Reconnecting…",
     },
