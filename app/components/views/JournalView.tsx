@@ -6,6 +6,7 @@ import { fmt } from "@/app/lib/market-data"
 interface Props {
   history: HistoryEntry[]
   onOpen?: (s: HistoryEntry) => void
+  onUpdateNote?: (sym: string, time: number, notes: string) => void
 }
 
 const LIFECYCLE: Record<string, { label: string; color: string }> = {
@@ -15,6 +16,7 @@ const LIFECYCLE: Record<string, { label: string; color: string }> = {
   SL:        { label: "SL ✗",     color: "#ff3d5a" },
   CLOSED:    { label: "CLOSED",   color: "#a78bfa" },
   CANCELLED: { label: "VOID",     color: "#5a6779" },
+  EXPIRED:   { label: "EXPIRED",  color: "#f59e0b" },
 }
 
 function LifecycleBadge({ state }: { state: string }) {
@@ -48,7 +50,7 @@ const FILTERS = [
   { k: "losses", label: "Losses" },
 ] as const
 
-export default function JournalView({ history, onOpen }: Props) {
+export default function JournalView({ history, onOpen, onUpdateNote }: Props) {
   const [filter, setFilter] = useState<typeof FILTERS[number]["k"]>("all")
   const [q, setQ] = useState("")
   const [sort, setSort] = useState<"time" | "conf" | "pnl">("time")
@@ -180,7 +182,7 @@ export default function JournalView({ history, onOpen }: Props) {
           <table className="w-full text-[11.5px]">
             <thead className="sticky top-0 bg-ink-900 z-10">
               <tr className="text-[9.5px] tracking-[0.14em] uppercase text-mute border-b hairline">
-                {["Time", "Pair", "Side", "TF", "Strategy", "Entry", "SL", "TP2", "Conf", "R:R", "State", "P&L"].map(h => (
+                {["Time", "Pair", "Side", "TF", "Strategy", "Entry", "SL", "TP2", "Conf", "R:R", "State", "P&L", "Notes"].map(h => (
                   <th key={h} className="px-3 py-2.5 text-left font-medium whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -214,6 +216,16 @@ export default function JournalView({ history, onOpen }: Props) {
                     <td className="px-3 py-2.5"><LifecycleBadge state={s.state} /></td>
                     <td className="px-3 py-2.5 num font-semibold" style={{ color: pnlColor }}>
                       {pnl == null ? "—" : `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}R`}
+                    </td>
+                    <td className="px-3 py-2.5 min-w-[160px]" onClick={e => e.stopPropagation()}>
+                      <input
+                        type="text"
+                        defaultValue={s.notes ?? ""}
+                        onBlur={e => onUpdateNote?.(s.sym, s.time, e.currentTarget.value.trim())}
+                        onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur() }}
+                        placeholder="Add note…"
+                        className="w-full bg-transparent outline-none text-[11px] text-white/70 placeholder:text-white/20 border-b border-transparent focus:border-white/15 transition pb-0.5"
+                      />
                     </td>
                   </tr>
                 )

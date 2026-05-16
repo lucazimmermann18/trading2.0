@@ -4,6 +4,102 @@ import type { Pair, HistoryEntry, Signal, ConfluenceItem } from "@/app/lib/types
 import { fmt, timeAgo, SKILLSETS } from "@/app/lib/market-data"
 import { buildSMCContext } from "@/app/lib/smc"
 
+const SIZER_KEY = "tradeai_sizer_v1"
+
+function loadSizerPrefs(): { account: string; riskPct: string } {
+  if (typeof window === "undefined") return { account: "10000", riskPct: "1" }
+  try {
+    const raw = localStorage.getItem(SIZER_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch {}
+  return { account: "10000", riskPct: "1" }
+}
+
+function PositionSizer({ pair }: { pair: Pair }) {
+  const [prefs, setPrefs] = useState(loadSizerPrefs)
+
+  const persist = (patch: Partial<typeof prefs>) => {
+    setPrefs(prev => {
+      const next = { ...prev, ...patch }
+      try { localStorage.setItem(SIZER_KEY, JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
+
+  const signal = pair.signal
+  const account = parseFloat(prefs.account) || 0
+  const riskPct = Math.min(10, Math.max(0.1, parseFloat(prefs.riskPct) || 1))
+  const dollarRisk = account * (riskPct / 100)
+
+  // pip size: JPY pairs = 0.01, others = 0.0001 (crypto/indices handled by digits)
+  const pipSize = pair.digits <= 2 ? 0.01 : pair.digits <= 3 ? 0.001 : 0.0001
+  const slDistance = signal ? Math.abs(signal.entry - signal.sl) : 0
+  const slPips = slDistance > 0 ? slDistance / pipSize : 0
+  // Standard lot pip value ≈ $10 for USD-quoted pairs, approximate for others
+  const pipValue = 10
+  const lots = slPips > 0 ? dollarRisk / (slPips * pipValue) : 0
+  const miniLots = lots * 10
+  const microLots = lots * 100
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <div className="text-[9.5px] tracking-[0.14em] text-mute mb-1.5 uppercase">Account ($)</div>
+          <input
+            type="number"
+            min="100" step="100"
+            value={prefs.account}
+            onChange={e => persist({ account: e.target.value })}
+            className="w-full h-8 px-2 rounded-md bg-white/[0.025] border border-white/[0.06] text-[12px] text-white outline-none focus:border-accent-blue/40 num transition"
+          />
+        </div>
+        <div>
+          <div className="text-[9.5px] tracking-[0.14em] text-mute mb-1.5 uppercase">Risk %</div>
+          <input
+            type="number"
+            min="0.1" max="10" step="0.1"
+            value={prefs.riskPct}
+            onChange={e => persist({ riskPct: e.target.value })}
+            className="w-full h-8 px-2 rounded-md bg-white/[0.025] border border-white/[0.06] text-[12px] text-white outline-none focus:border-accent-blue/40 num transition"
+          />
+        </div>
+      </div>
+
+      {/* Results */}
+      <div className="rounded-md p-2.5 bg-white/[0.025] border border-white/[0.05] space-y-1.5">
+        <div className="flex items-center justify-between text-[10.5px]">
+          <span className="text-mute tracking-[0.12em]">$ at risk</span>
+          <span className="num font-semibold text-accent-red">${dollarRisk.toFixed(2)}</span>
+        </div>
+        {signal && slPips > 0 ? (
+          <>
+            <div className="flex items-center justify-between text-[10.5px]">
+              <span className="text-mute tracking-[0.12em]">SL distance</span>
+              <span className="num text-white">{slPips.toFixed(1)} pips</span>
+            </div>
+            <div className="h-px bg-white/[0.06] my-0.5" />
+            <div className="flex items-center justify-between text-[10.5px]">
+              <span className="text-mute tracking-[0.12em]">Standard lots</span>
+              <span className="num font-bold text-accent-blue">{lots.toFixed(2)}</span>
+            </div>
+            <div className="flex items-center justify-between text-[10.5px]">
+              <span className="text-mute tracking-[0.12em]">Mini lots</span>
+              <span className="num text-white/70">{miniLots.toFixed(1)}</span>
+            </div>
+            <div className="flex items-center justify-between text-[10.5px]">
+              <span className="text-mute tracking-[0.12em]">Micro lots</span>
+              <span className="num text-white/70">{microLots.toFixed(0)}</span>
+            </div>
+          </>
+        ) : (
+          <div className="text-[10px] text-mute/60 italic">Active signal required for lot calculation</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 interface Props {
   pair: Pair
   skillset: string
@@ -441,6 +537,11 @@ export default function AIPanel({ pair, skillset, setSkillset, history, threshol
             </div>
           </Section>
         )}
+
+        {/* Position Sizing */}
+        <Section label="Position Sizer" sub="Risk calculator">
+          <PositionSizer pair={pair} />
+        </Section>
 
         {/* Confidence */}
         <Section label="AI Confidence">

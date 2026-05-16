@@ -12,6 +12,7 @@ export interface Pair {
   signal: Signal | null
   lastScan: number
   history: OHLCBar[]
+  h4History?: OHLCBar[]
   reasoning: string
   confidence: number
   rsi: number

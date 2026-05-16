@@ -542,26 +542,48 @@ function APIsTab() {
 }
 
 /* ── Schedule Tab ──────────────────────────────────────────── */
+const SCHEDULE_KEY = "tradeai_schedule_v1"
+const MAX_SIGNALS_OPTIONS = ["3", "5", "10", "Unlimited"]
+const SESSION_DEFS = [
+  { key: "tokyo",  label: "Tokyo",    open: 23, close: 8  },
+  { key: "london", label: "London",   open: 8,  close: 17 },
+  { key: "ny",     label: "New York", open: 13, close: 22 },
+  { key: "sydney", label: "Sydney",   open: 21, close: 6  },
+]
+
+function loadSchedule() {
+  if (typeof window === "undefined") return { active: ["london", "ny"], blackout: "", maxSignals: "5" }
+  try {
+    const raw = localStorage.getItem(SCHEDULE_KEY)
+    if (raw) return JSON.parse(raw) as { active: string[]; blackout: string; maxSignals: string }
+  } catch {}
+  return { active: ["london", "ny"], blackout: "", maxSignals: "5" }
+}
+
 function ScheduleTab() {
-  const sessions = [
-    { key: "tokyo",  label: "Tokyo",    open: 23, close: 8  },
-    { key: "london", label: "London",   open: 8,  close: 17 },
-    { key: "ny",     label: "New York", open: 13, close: 22 },
-    { key: "sydney", label: "Sydney",   open: 21, close: 6  },
-  ]
-  const [active, setActive] = useState<string[]>(["london", "ny"])
-  const toggle = (k: string) => setActive(s => s.includes(k) ? s.filter(x => x !== k) : [...s, k])
+  const [sched, setSched] = useState(loadSchedule)
+
+  const persist = (patch: Partial<typeof sched>) => {
+    setSched(prev => {
+      const next = { ...prev, ...patch }
+      try { localStorage.setItem(SCHEDULE_KEY, JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
+
+  const toggleSession = (k: string) =>
+    persist({ active: sched.active.includes(k) ? sched.active.filter(x => x !== k) : [...sched.active, k] })
 
   return (
     <div className="space-y-5">
       <div>
         <Field label="Trading windows (UTC)" hint="Limit scans to market hours when liquidity is highest." />
         <div className="grid grid-cols-2 gap-2 mt-3">
-          {sessions.map(s => (
+          {SESSION_DEFS.map(s => (
             <div
               key={s.key}
               className={`px-3 py-2.5 rounded-md border flex items-center justify-between transition
-                ${active.includes(s.key) ? "border-accent-blue/30 bg-accent-blue/[0.05]" : "border-white/[0.06] bg-white/[0.02]"}`}
+                ${sched.active.includes(s.key) ? "border-accent-blue/30 bg-accent-blue/[0.05]" : "border-white/[0.06] bg-white/[0.02]"}`}
             >
               <div>
                 <div className="text-[12px] text-white">{s.label}</div>
@@ -569,23 +591,28 @@ function ScheduleTab() {
                   {String(s.open).padStart(2, "0")}:00 → {String(s.close).padStart(2, "0")}:00 UTC
                 </div>
               </div>
-              <Toggle checked={active.includes(s.key)} onChange={() => toggle(s.key)} />
+              <Toggle checked={sched.active.includes(s.key)} onChange={() => toggleSession(s.key)} />
             </div>
           ))}
         </div>
       </div>
       <div>
         <Field label="Blackout periods" hint="Pause AI during high-impact news or rollover (e.g. Fri 21:00 - Sun 22:00)" />
-        <TextInput value="" onChange={() => {}} placeholder="Fri 21:00 - Sun 22:00 UTC" />
+        <TextInput
+          value={sched.blackout}
+          onChange={v => persist({ blackout: v })}
+          placeholder="Fri 21:00 - Sun 22:00 UTC"
+        />
       </div>
       <div>
         <Field label="Max signals per session" />
         <div className="flex gap-2 mt-2">
-          {["3", "5", "10", "Unlimited"].map((n, i) => (
+          {MAX_SIGNALS_OPTIONS.map(n => (
             <button
               key={n}
+              onClick={() => persist({ maxSignals: n })}
               className={`flex-1 h-9 rounded-md border text-[12px] num transition
-                ${i === 1
+                ${sched.maxSignals === n
                   ? "border-accent-blue/50 bg-accent-blue/10 text-white"
                   : "border-white/[0.06] bg-white/[0.02] text-mute hover:text-white"}`}
             >

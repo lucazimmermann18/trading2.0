@@ -18,10 +18,11 @@ import type { Pair, HistoryEntry, ViewId, Timeframe, AuditEntry, AuditKind, Syst
 import {
   buildInitialState,
   activeSessions, buildMarketContext, calcRSI, calcMACD,
-  buildConfluences, SIGNAL_EXPIRY_MS,
+  buildConfluences, SIGNAL_EXPIRY_MS, buildCorrelationMatrix,
 } from "@/app/lib/market-data"
 import { fetchBars } from "@/app/lib/twelvedata"
-import { getCachedBars, getCachedBarsAnyAge, isCacheStale, setCachedBars } from "@/app/lib/bar-cache"
+import { getCachedBars, getCachedBarsAnyAge, isCacheStale, setCachedBars,
+         getCachedH4Bars, getCachedH4BarsAnyAge, setCachedH4Bars } from "@/app/lib/bar-cache"
 import { useAISettings } from "@/app/hooks/useAISettings"
 import { useTwelveDataWS } from "@/app/hooks/useTwelveDataWS"
 import { usePersistedState } from "@/app/hooks/usePersistedState"
@@ -119,30 +120,46 @@ export default function TradeApp() {
       const needsFetch = p.history.length < 50 || isCacheStale(p.sym)
       if (!needsFetch) return
 
-      const delay = fetchIdx++ * 500          // stagger to stay inside rate limit
+      const delay = fetchIdx++ * 500
       setTimeout(async () => {
         try {
+          // H1 fetch
           let bars = await fetchBars(p.sym, "H1", 220)
           let fromCache = false
           if (!bars.length) {
-            // API returned nothing (weekend / market closed / rate-limit) — use stale cache
             const stale = getCachedBarsAnyAge(p.sym)
             if (stale?.length) { bars = stale; fromCache = true }
           }
-          if (!bars.length) {
-            logEvent("feed", `${p.sym} · no data available — market may be closed`)
-            return
-          }
+          if (!bars.length) { logEvent("feed", `${p.sym} · no data — market may be closed`); return }
           if (!fromCache) setCachedBars(p.sym, bars)
+
+          // H4 fetch (in parallel, staggered +200ms to avoid rate limit)
+          const h4Bars = getCachedH4Bars(p.sym)
+          if (!h4Bars) {
+            setTimeout(async () => {
+              try {
+                let fetched = await fetchBars(p.sym, "H4", 150)
+                if (!fetched.length) {
+                  const stale = getCachedH4BarsAnyAge(p.sym)
+                  if (stale?.length) fetched = stale
+                }
+                if (fetched.length) {
+                  setCachedH4Bars(p.sym, fetched)
+                  setPairs(prev => prev.map(q => q.id !== p.id ? q : { ...q, h4History: fetched }))
+                }
+              } catch { /* non-critical */ }
+            }, 200)
+          }
+
           const closes = bars.map(b => b.close)
           const rsi = calcRSI(closes)
           const { macdLine } = calcMACD(closes)
           setPairs(prev => prev.map(pair =>
             pair.id !== p.id ? pair
-              : { ...pair, history: bars, rsi, macd: macdLine, px: bars[bars.length - 1].close }
+              : { ...pair, history: bars, h4History: h4Bars ?? pair.h4History, rsi, macd: macdLine, px: bars[bars.length - 1].close }
           ))
           const label = fromCache ? "cached (market closed)" : p.history.length < 50 ? "loaded" : "refreshed"
-          logEvent("feed", `${p.sym} · ${bars.length} H1 bars ${label}`)
+          logEvent("feed", `${p.sym} · ${bars.length} H1${h4Bars ? ` + ${h4Bars.length} H4` : ""} bars ${label}`)
         } catch {
           logEvent("feed", `${p.sym} · bar fetch failed`)
         }
@@ -289,14 +306,37 @@ export default function TradeApp() {
     const avgLat = latencies.length ? Math.round(latencies.reduce((s, v) => s + v, 0) / latencies.length) : 0
     let sigCount = 0
 
+    // Collect signals and detect correlated pairs firing simultaneously
+    const signalPairs: Array<{ p: Pair; sig: NonNullable<Pair["signal"]> }> = []
     for (const [pairId, sig] of Array.from(results)) {
       if (!sig) continue
       sigCount++
       const p = activePairs.find(ap => ap.id === pairId)!
+      signalPairs.push({ p, sig })
       setToast({ pair: p, signal: sig })
       setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 200))
       setUnread(u => u + 1)
       notifSettings.sendSignal({ ...sig, sym: p.sym, digits: p.digits })
+    }
+
+    // Correlation warning: warn when 2+ signals share highly correlated pairs
+    if (signalPairs.length >= 2) {
+      const matrix = buildCorrelationMatrix(pairs)
+      const warned = new Set<string>()
+      for (let i = 0; i < signalPairs.length; i++) {
+        for (let j = i + 1; j < signalPairs.length; j++) {
+          const symA = signalPairs[i].p.sym
+          const symB = signalPairs[j].p.sym
+          const key = [symA, symB].sort().join("|")
+          if (warned.has(key)) continue
+          const rowA = matrix.find(r => r.sym === symA)
+          const idxB = matrix.findIndex(r => r.sym === symB)
+          if (rowA && idxB !== -1 && Math.abs(rowA.row[idxB]) > 0.7) {
+            warned.add(key)
+            logEvent("signal", `⚠ Correlation warning: ${symA} & ${symB} are highly correlated (${(rowA.row[idxB] * 100).toFixed(0)}%) — consider sizing down`)
+          }
+        }
+      }
     }
 
     setPairs(prev => prev.map(p => {
@@ -548,7 +588,10 @@ export default function TradeApp() {
         {view === "multichart"   && <MultiChartView pairs={pairs} onOpen={handleOpenPair} />}
         {view === "heatmap"      && <HeatmapView pairs={pairs} />}
         {view === "performance"  && <PerformanceView history={history} />}
-        {view === "journal"      && <JournalView history={history} onOpen={setSelectedSignal} />}
+        {view === "journal"      && <JournalView history={history} onOpen={setSelectedSignal} onUpdateNote={(sym, time, notes) => {
+            patchHistoryEntry(sym, time, { notes })
+            setHistory(prev => prev.map(h => h.sym === sym && h.time === time ? { ...h, notes } : h))
+          }} />}
         {view === "replay"       && <ReplayView history={history} pairs={pairs} />}
         {view === "system" && (
           <SystemView

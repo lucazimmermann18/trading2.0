@@ -315,7 +315,7 @@ export function buildMarketContext(p: Pair): MarketContext {
   const atr    = calcATR(p.history)
   const candlePatterns = detectCandlePatterns(p.history.slice(-5))
   const htf    = buildHigherTFContext(p.history)
-  const smc    = buildSMCContext(p.history, p.px)
+  const smc    = buildSMCContext(p.history, p.px, p.h4History)
   return { rsi, macdLine, signalLine, histogram, bb, trend, swings, activeSessions: sessions, atr, candlePatterns, htf, smc }
 }
 
