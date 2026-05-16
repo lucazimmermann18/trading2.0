@@ -1,17 +1,20 @@
 "use client"
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import type { Pair, HistoryEntry } from "@/app/lib/types"
 import { fmt } from "@/app/lib/market-data"
+import { fetchBars } from "@/app/lib/twelvedata"
+import { setCachedBars } from "@/app/lib/bar-cache"
 
 interface Props { history: HistoryEntry[]; pairs: Pair[] }
 
 const LIFECYCLE: Record<string, { label: string; color: string }> = {
-  ACTIVE: { label: "ACTIVE", color: "#00d4ff" },
-  TP1:    { label: "TP1 ✓", color: "#00ff88" },
-  TP2:    { label: "TP2 ✓", color: "#00ff88" },
-  SL:     { label: "SL ✗",  color: "#ff3d5a" },
-  CLOSED: { label: "CLOSED",color: "#a78bfa" },
-  CANCELLED: { label: "VOID", color: "#5a6779" },
+  ACTIVE:    { label: "ACTIVE",  color: "#00d4ff" },
+  TP1:       { label: "TP1 ✓",  color: "#00ff88" },
+  TP2:       { label: "TP2 ✓",  color: "#00ff88" },
+  SL:        { label: "SL ✗",   color: "#ff3d5a" },
+  CLOSED:    { label: "CLOSED", color: "#a78bfa" },
+  CANCELLED: { label: "VOID",   color: "#5a6779" },
+  EXPIRED:   { label: "EXPIRED",color: "#f59e0b" },
 }
 
 function LifecycleBadge({ state }: { state: string }) {
@@ -33,32 +36,56 @@ function KVMini({ label, value, color = "#ffffff" }: { label: string; value: str
 
 type OHLCBar = { open: number; high: number; low: number; close: number; time?: number }
 
-function ReplayChart({ signal, pair }: { signal: HistoryEntry; pair: Pair | undefined }) {
+function ReplayChart({ signal, bars: sourceBars, onLoadBars, loading }: {
+  signal: HistoryEntry
+  bars: OHLCBar[]
+  onLoadBars: () => void
+  loading: boolean
+}) {
   const { data, entryBarIdx } = useMemo(() => {
-    if (!pair || pair.history.length < 10) {
-      return { data: [] as OHLCBar[], entryBarIdx: -1 }
-    }
+    if (sourceBars.length < 10) return { data: [] as OHLCBar[], entryBarIdx: -1 }
     const sigTimeSec = Math.floor(signal.time / 1000)
-    const bars = pair.history
-    let closestIdx = bars.length - 1
+    let closestIdx = sourceBars.length - 1
     let minDiff = Infinity
-    for (let i = 0; i < bars.length; i++) {
-      const diff = Math.abs(bars[i].time - sigTimeSec)
+    for (let i = 0; i < sourceBars.length; i++) {
+      const diff = Math.abs((sourceBars[i]?.time ?? 0) - sigTimeSec)
       if (diff < minDiff) { minDiff = diff; closestIdx = i }
     }
     const before = Math.min(closestIdx, 50)
-    const after  = Math.min(bars.length - 1 - closestIdx, 15)
-    const sliced = bars.slice(closestIdx - before, closestIdx + after + 1)
+    const after  = Math.min(sourceBars.length - 1 - closestIdx, 15)
+    const sliced = sourceBars.slice(closestIdx - before, closestIdx + after + 1)
     return { data: sliced as OHLCBar[], entryBarIdx: before }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pair?.sym, pair?.history.length, signal.time])
+  }, [sourceBars, signal.time])
 
   if (!data.length) {
     return (
       <div className="flex items-center justify-center h-[260px] rounded-md bg-white/[0.02] border border-white/[0.04]">
-        <div className="text-center">
-          <div className="text-mute text-[12px] mb-1">No chart data available</div>
-          <div className="text-mute text-[10px] opacity-60">Pair history not loaded or signal too old</div>
+        <div className="text-center space-y-3">
+          <div className="text-mute text-[12px]">Chart data not in memory</div>
+          <button
+            onClick={onLoadBars}
+            disabled={loading}
+            className={`h-8 px-4 rounded-md text-[11px] font-semibold tracking-[0.14em] transition flex items-center gap-2 mx-auto
+              ${loading ? "bg-accent-blue/10 text-accent-blue/50 cursor-not-allowed" : "bg-accent-blue/15 text-accent-blue hover:bg-accent-blue/25"}`}
+          >
+            {loading ? (
+              <>
+                <svg className="animate-spin" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                </svg>
+                Loading…
+              </>
+            ) : (
+              <>
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Load Chart Data
+              </>
+            )}
+          </button>
+          <div className="text-mute text-[10px] opacity-50">Fetches live H1 bars from Twelve Data</div>
         </div>
       </div>
     )
@@ -143,6 +170,21 @@ export default function ReplayView({ history, pairs }: Props) {
   const [idx, setIdx] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(600)
+  const [loadedBars, setLoadedBars] = useState<Record<string, OHLCBar[]>>({})
+  const [fetchingSym, setFetchingSym] = useState<string | null>(null)
+
+  const loadBarsForSym = useCallback(async (sym: string) => {
+    if (fetchingSym === sym) return
+    setFetchingSym(sym)
+    try {
+      const bars = await fetchBars(sym, "H1", 220)
+      if (bars.length) {
+        setLoadedBars(prev => ({ ...prev, [sym]: bars as OHLCBar[] }))
+        setCachedBars(sym, bars)
+      }
+    } catch { /* non-critical */ }
+    setFetchingSym(null)
+  }, [fetchingSym])
 
   useEffect(() => {
     if (!playing) return
@@ -225,7 +267,16 @@ export default function ReplayView({ history, pairs }: Props) {
               color={pnlColor} />
           </div>
 
-          <ReplayChart signal={s} pair={pairs.find(p => p.sym === s.sym)} />
+          <ReplayChart
+            signal={s}
+            bars={((): OHLCBar[] => {
+              const pair = pairs.find(p => p.sym === s.sym)
+              if (pair && pair.history.length >= 10) return pair.history as OHLCBar[]
+              return (loadedBars[s.sym] ?? []) as OHLCBar[]
+            })()}
+            onLoadBars={() => loadBarsForSym(s.sym)}
+            loading={fetchingSym === s.sym}
+          />
 
           <div className="mt-4 px-3 py-2.5 rounded-md bg-white/[0.02] border border-white/[0.05]">
             <div className="text-[9px] tracking-[0.18em] uppercase text-mute mb-1">AI Reasoning</div>

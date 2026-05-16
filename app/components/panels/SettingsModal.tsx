@@ -14,6 +14,8 @@ interface Props {
   onClose: () => void
   pairs: Pair[]
   onTogglePair: (id: number) => void
+  onAddPair: (sym: string, group: string) => void
+  onRemovePair: (id: number) => void
   skillset: string
   setSkillset: (s: string) => void
   threshold: number
@@ -297,26 +299,44 @@ function AIModelsTab({ aiSettings }: { aiSettings: AISettingsHook }) {
 }
 
 /* ── Pairs Tab ─────────────────────────────────────────────── */
-function PairsTab({ pairs, onTogglePair }: { pairs: Pair[]; onTogglePair: (id: number) => void }) {
-  const groups = Array.from(new Set(pairs.map(p => p.group)))
+const CUSTOM_GROUPS = ["FX Major", "FX Cross", "Metals", "Crypto", "Index", "Energy", "Custom"]
+
+function PairsTab({ pairs, onTogglePair, onAddPair, onRemovePair }: {
+  pairs: Pair[]
+  onTogglePair: (id: number) => void
+  onAddPair: (sym: string, group: string) => void
+  onRemovePair: (id: number) => void
+}) {
+  const [newSym, setNewSym] = useState("")
+  const [newGroup, setNewGroup] = useState("FX Cross")
+  const [addErr, setAddErr] = useState("")
+
+  const builtIn = pairs.filter(p => p.id < 1000)
+  const custom  = pairs.filter(p => p.id >= 1000)
+  const groups  = Array.from(new Set(builtIn.map(p => p.group)))
+
+  const handleAdd = () => {
+    const sym = newSym.trim().toUpperCase()
+    if (!sym) { setAddErr("Enter a symbol"); return }
+    if (pairs.some(p => p.sym === sym)) { setAddErr("Already exists"); return }
+    setAddErr("")
+    onAddPair(sym, newGroup)
+    setNewSym("")
+  }
+
   return (
-    <div>
+    <div className="space-y-1">
       <Field label="Active pairs for AI scanning" hint="Disabled pairs will not be analyzed during scan cycles." />
       {groups.map(g => (
         <div key={g} className="mt-4">
           <div className="text-[10px] tracking-[0.18em] uppercase text-mute mb-2 px-1">{g}</div>
           <div className="grid grid-cols-2 gap-1.5">
-            {pairs.filter(p => p.group === g).map(p => (
+            {builtIn.filter(p => p.group === g).map(p => (
               <label
                 key={p.id}
                 className="flex items-center gap-2.5 px-3 h-11 rounded-md bg-white/[0.025] border border-white/[0.05] hover:bg-white/[0.04] cursor-pointer transition"
               >
-                <input
-                  type="checkbox"
-                  checked={p.active}
-                  onChange={() => onTogglePair(p.id)}
-                  className="accent-[#00d4ff] w-3.5 h-3.5"
-                />
+                <input type="checkbox" checked={p.active} onChange={() => onTogglePair(p.id)} className="accent-[#00d4ff] w-3.5 h-3.5" />
                 <div className="flex-1 min-w-0">
                   <div className="text-[12px] text-white font-medium">{p.sym}</div>
                   <div className="text-[9.5px] text-mute tracking-[0.1em]">{p.name}</div>
@@ -327,6 +347,68 @@ function PairsTab({ pairs, onTogglePair }: { pairs: Pair[]; onTogglePair: (id: n
           </div>
         </div>
       ))}
+
+      {/* Custom pairs */}
+      <div className="mt-6 pt-4 border-t border-white/[0.06]">
+        <div className="text-[10px] tracking-[0.18em] uppercase text-mute mb-3 px-1 flex items-center gap-2">
+          Custom Pairs
+          <span className="px-1.5 h-4 rounded bg-accent-violet/20 text-accent-violet text-[9px] font-bold flex items-center">
+            {custom.length}
+          </span>
+        </div>
+
+        {custom.length > 0 && (
+          <div className="grid grid-cols-2 gap-1.5 mb-3">
+            {custom.map(p => (
+              <div key={p.id} className="flex items-center gap-2 px-3 h-11 rounded-md bg-accent-violet/[0.04] border border-accent-violet/20">
+                <input type="checkbox" checked={p.active} onChange={() => onTogglePair(p.id)} className="accent-[#00d4ff] w-3.5 h-3.5" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] text-white font-medium">{p.sym}</div>
+                  <div className="text-[9.5px] text-mute">{p.group}</div>
+                </div>
+                <button
+                  onClick={() => onRemovePair(p.id)}
+                  className="text-mute hover:text-accent-red transition shrink-0"
+                  title="Remove"
+                >
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add custom pair form */}
+        <div className="flex gap-2">
+          <input
+            value={newSym}
+            onChange={e => { setNewSym(e.target.value); setAddErr("") }}
+            onKeyDown={e => { if (e.key === "Enter") handleAdd() }}
+            placeholder="e.g. GBP/NZD or AAPL"
+            className="flex-1 h-9 px-3 rounded-md bg-white/[0.025] border border-white/[0.06] text-[12px] text-white outline-none focus:border-accent-blue/50 placeholder:text-mute/50 uppercase transition"
+          />
+          <select
+            value={newGroup}
+            onChange={e => setNewGroup(e.target.value)}
+            className="h-9 px-2 rounded-md bg-white/[0.025] border border-white/[0.06] text-[11px] text-white outline-none cursor-pointer"
+          >
+            {CUSTOM_GROUPS.map(g => <option key={g} value={g} className="bg-[#0a0e1a]">{g}</option>)}
+          </select>
+          <button
+            onClick={handleAdd}
+            className="h-9 px-4 rounded-md bg-accent-blue/15 text-accent-blue text-[11px] font-bold tracking-[0.14em] hover:bg-accent-blue/25 transition shrink-0"
+            style={{ boxShadow: "inset 0 0 0 1px rgba(0,212,255,0.2)" }}
+          >
+            ADD
+          </button>
+        </div>
+        {addErr && <div className="text-[10px] text-accent-red mt-1.5 px-1">{addErr}</div>}
+        <div className="text-[10px] text-mute mt-2 px-1 leading-relaxed">
+          Symbol must be valid on Twelve Data (e.g. EUR/CAD, AAPL, GER40). Bars will load automatically.
+        </div>
+      </div>
     </div>
   )
 }
@@ -628,7 +710,7 @@ function ScheduleTab() {
 /* ── Main Modal ────────────────────────────────────────────── */
 export default function SettingsModal({
   open, onClose,
-  pairs, onTogglePair,
+  pairs, onTogglePair, onAddPair, onRemovePair,
   skillset, setSkillset,
   threshold, setThreshold,
   aiSettings, notifSettings,
@@ -725,7 +807,7 @@ export default function SettingsModal({
           {/* Content */}
           <div className="flex-1 overflow-y-auto p-5 min-h-0">
             {tab === "ai-models"  && <AIModelsTab aiSettings={aiSettings} />}
-            {tab === "pairs"      && <PairsTab pairs={pairs} onTogglePair={onTogglePair} />}
+            {tab === "pairs"      && <PairsTab pairs={pairs} onTogglePair={onTogglePair} onAddPair={onAddPair} onRemovePair={onRemovePair} />}
             {tab === "strategy"   && <StrategyTab skillset={skillset} setSkillset={setSkillset} threshold={threshold} setThreshold={setThreshold} />}
             {tab === "notif"      && <NotificationsTab notifSettings={notifSettings} />}
             {tab === "apis"       && <APIsTab />}

@@ -33,6 +33,26 @@ import { useSignalLifecycle, type ResolvedSignal } from "@/app/hooks/useSignalLi
 import { loadHistory, saveHistory, patchHistoryEntry } from "@/app/lib/history-store"
 
 
+// ── Custom pair storage ───────────────────────────────────────
+const CUSTOM_PAIRS_KEY = "tradeai_custom_pairs_v1"
+interface CustomPairDef { sym: string; name: string; group: string; digits: number; spread: number }
+
+function loadCustomDefs(): CustomPairDef[] {
+  if (typeof window === "undefined") return []
+  try { return JSON.parse(localStorage.getItem(CUSTOM_PAIRS_KEY) ?? "[]") } catch { return [] }
+}
+function saveCustomDefs(defs: CustomPairDef[]) {
+  try { localStorage.setItem(CUSTOM_PAIRS_KEY, JSON.stringify(defs)) } catch {}
+}
+function guessDigits(sym: string): number {
+  if (sym.includes("JPY")) return 3
+  if (sym.includes("XAU") || sym.includes("XAG")) return 2
+  if (/BTC|ETH|SOL|AVAX/.test(sym)) return 2
+  if (/XRP|DOGE/.test(sym)) return 4
+  if (/[A-Z]+\/[A-Z]+/.test(sym)) return 5
+  return 2
+}
+
 export default function TradeApp() {
   const [pairs, setPairs] = useState<Pair[]>([])
   const [selectedId, setSelectedId] = useState(7) // XAU/USD
@@ -88,6 +108,26 @@ export default function TradeApp() {
     },
   })
 
+  // WS reconnect banner
+  const [wsBanner, setWsBanner] = useState<"disconnected" | "reconnected" | null>(null)
+  const prevWsConnected = useRef<boolean | null>(null)
+  const wsBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (prevWsConnected.current === null) { prevWsConnected.current = wsConnected; return }
+    const prev = prevWsConnected.current
+    prevWsConnected.current = wsConnected
+    if (prev && !wsConnected) {
+      if (wsBannerTimerRef.current) clearTimeout(wsBannerTimerRef.current)
+      setWsBanner("disconnected")
+      logEvent("feed", "⚠ WebSocket disconnected — reconnecting…")
+    } else if (!prev && wsConnected) {
+      if (wsBannerTimerRef.current) clearTimeout(wsBannerTimerRef.current)
+      setWsBanner("reconnected")
+      logEvent("feed", "✓ WebSocket reconnected — live prices restored")
+      wsBannerTimerRef.current = setTimeout(() => setWsBanner(null), 4000)
+    }
+  }, [wsConnected, logEvent])
+
   const barFetchRef = useRef(false)
 
   // Build initial pairs — hydrate from localStorage cache instantly, then
@@ -112,11 +152,28 @@ export default function TradeApp() {
         px: cached[cached.length - 1].close,
       }
     })
-    setPairs(hydratedPairs)
+    // Load custom pairs from localStorage and append
+    const customDefs = loadCustomDefs()
+    const customPairs: Pair[] = customDefs.map((def, i) => {
+      const id = 1000 + i
+      const cached = getCachedBars(def.sym)
+      const closes = cached?.map(b => b.close) ?? []
+      return {
+        id, sym: def.sym, name: def.name, group: def.group, digits: def.digits,
+        spread: def.spread, vol: 0, px: cached ? cached[cached.length - 1].close : 0,
+        active: true, status: "NO TRADE" as const, signal: null, lastScan: 0,
+        history: cached ?? [], h4History: undefined,
+        reasoning: "Waiting for market data…", confidence: 0,
+        rsi: closes.length ? calcRSI(closes) : 50,
+        macd: closes.length ? calcMACD(closes).macdLine : 0,
+      }
+    })
+    const allPairs = [...hydratedPairs, ...customPairs]
+    setPairs(allPairs)
 
     // Pass 2: refresh entries that are missing or older than 1 h
     let fetchIdx = 0
-    hydratedPairs.filter(p => p.active).forEach(p => {
+    allPairs.filter(p => p.active).forEach(p => {
       const needsFetch = p.history.length < 50 || isCacheStale(p.sym)
       if (!needsFetch) return
 
@@ -517,6 +574,42 @@ export default function TradeApp() {
   const handleSetTimeframe = (v: Timeframe) => { setTimeframe(v); persSave({ timeframe: v }); logEvent("config", `Timeframe → ${v}`) }
   const handleSetScannerOn = (v: boolean) => { setScannerOn(v); persSave({ scannerOn: v }); logEvent("config", v ? "AI Scanner started" : "AI Scanner paused") }
 
+  const handleAddCustomPair = (sym: string, group: string) => {
+    const digits = guessDigits(sym)
+    const existingCustom = pairs.filter(p => p.id >= 1000)
+    const id = 1000 + existingCustom.length
+    const def: CustomPairDef = { sym, name: sym, group, digits, spread: 1.0 }
+    const defs = loadCustomDefs()
+    saveCustomDefs([...defs, def])
+    const newPair: Pair = {
+      id, sym, name: sym, group, digits, spread: 1.0, vol: 0, px: 0,
+      active: true, status: "NO TRADE" as const, signal: null, lastScan: 0,
+      history: [], h4History: undefined,
+      reasoning: "Waiting for market data…", confidence: 0, rsi: 50, macd: 0,
+    }
+    setPairs(prev => [...prev, newPair])
+    logEvent("config", `Added custom pair: ${sym}`)
+    // Fetch bars immediately
+    fetchBars(sym, "H1", 220).then(bars => {
+      if (!bars.length) return
+      setCachedBars(sym, bars)
+      const closes = bars.map(b => b.close)
+      setPairs(prev => prev.map(p =>
+        p.id !== id ? p : { ...p, history: bars, rsi: calcRSI(closes), macd: calcMACD(closes).macdLine, px: bars[bars.length - 1].close }
+      ))
+      logEvent("feed", `${sym} · ${bars.length} H1 bars loaded`)
+    }).catch(() => logEvent("feed", `${sym} · bar fetch failed — check symbol`))
+  }
+
+  const handleRemoveCustomPair = (id: number) => {
+    const p = pairs.find(q => q.id === id)
+    if (!p) return
+    setPairs(prev => prev.filter(q => q.id !== id))
+    const defs = loadCustomDefs().filter(d => d.sym !== p.sym)
+    saveCustomDefs(defs)
+    logEvent("config", `Removed custom pair: ${p.sym}`)
+  }
+
   const handleOpenPair = (id: number) => {
     setSelectedId(id)
     setView("dashboard")
@@ -542,6 +635,25 @@ export default function TradeApp() {
         onOpenSettings={() => setSettingsOpen(true)}
         wsConnected={wsConnected}
       />
+
+      {/* WS status banner */}
+      {wsBanner && (
+        <div className={`h-8 flex items-center justify-between px-4 text-[11px] font-medium tracking-[0.12em] transition shrink-0
+          ${wsBanner === "disconnected"
+            ? "bg-amber-500/10 border-b border-amber-500/20 text-amber-400"
+            : "bg-accent-green/10 border-b border-accent-green/20 text-accent-green"}`}
+        >
+          <div className="flex items-center gap-2">
+            <span className={`w-1.5 h-1.5 rounded-full ${wsBanner === "disconnected" ? "bg-amber-400 animate-pulse" : "bg-accent-green"}`}/>
+            {wsBanner === "disconnected"
+              ? "⚠ WebSocket disconnected — reconnecting automatically…"
+              : "✓ WebSocket reconnected — live prices restored"}
+          </div>
+          {wsBanner === "disconnected" && (
+            <button onClick={() => setWsBanner(null)} className="text-amber-400/60 hover:text-amber-400 transition">✕</button>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-1 min-h-0">
         <NavRail
@@ -632,6 +744,8 @@ export default function TradeApp() {
         onClose={() => setSettingsOpen(false)}
         pairs={pairs}
         onTogglePair={onToggleActive}
+        onAddPair={handleAddCustomPair}
+        onRemovePair={handleRemoveCustomPair}
         skillset={skillset}
         setSkillset={handleSetSkillset}
         threshold={threshold}
