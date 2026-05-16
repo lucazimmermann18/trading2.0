@@ -21,7 +21,7 @@ import {
   buildConfluences, SIGNAL_EXPIRY_MS,
 } from "@/app/lib/market-data"
 import { fetchBars } from "@/app/lib/twelvedata"
-import { getCachedBars, isCacheStale, setCachedBars } from "@/app/lib/bar-cache"
+import { getCachedBars, getCachedBarsAnyAge, isCacheStale, setCachedBars } from "@/app/lib/bar-cache"
 import { useAISettings } from "@/app/hooks/useAISettings"
 import { useTwelveDataWS } from "@/app/hooks/useTwelveDataWS"
 import { usePersistedState } from "@/app/hooks/usePersistedState"
@@ -116,9 +116,18 @@ export default function TradeApp() {
       const delay = fetchIdx++ * 500          // stagger to stay inside rate limit
       setTimeout(async () => {
         try {
-          const bars = await fetchBars(p.sym, "H1", 220)
-          if (!bars.length) return
-          setCachedBars(p.sym, bars)
+          let bars = await fetchBars(p.sym, "H1", 220)
+          let fromCache = false
+          if (!bars.length) {
+            // API returned nothing (weekend / market closed / rate-limit) — use stale cache
+            const stale = getCachedBarsAnyAge(p.sym)
+            if (stale?.length) { bars = stale; fromCache = true }
+          }
+          if (!bars.length) {
+            logEvent("feed", `${p.sym} · no data available — market may be closed`)
+            return
+          }
+          if (!fromCache) setCachedBars(p.sym, bars)
           const closes = bars.map(b => b.close)
           const rsi = calcRSI(closes)
           const { macdLine } = calcMACD(closes)
@@ -126,7 +135,8 @@ export default function TradeApp() {
             pair.id !== p.id ? pair
               : { ...pair, history: bars, rsi, macd: macdLine, px: bars[bars.length - 1].close }
           ))
-          logEvent("feed", `${p.sym} · ${bars.length} H1 bars ${p.history.length < 50 ? "loaded" : "refreshed"}`)
+          const label = fromCache ? "cached (market closed)" : p.history.length < 50 ? "loaded" : "refreshed"
+          logEvent("feed", `${p.sym} · ${bars.length} H1 bars ${label}`)
         } catch {
           logEvent("feed", `${p.sym} · bar fetch failed`)
         }
@@ -400,16 +410,22 @@ export default function TradeApp() {
       persSave({ activePairIds: next.filter(p => p.active).map(p => p.id) })
       const pair = next.find(p => p.id === id)
       if (pair?.active && pair.history.length < 50) {
-        fetchBars(pair.sym, "H1", 220).then(bars => {
-          if (!bars.length) return
-          setCachedBars(pair.sym, bars)
+        fetchBars(pair.sym, "H1", 220).then(apiBars => {
+          let bars = apiBars
+          let fromCache = false
+          if (!bars.length) {
+            const stale = getCachedBarsAnyAge(pair.sym)
+            if (stale?.length) { bars = stale; fromCache = true }
+          }
+          if (!bars.length) { logEvent("feed", `${pair.sym} · no data — market may be closed`); return }
+          if (!fromCache) setCachedBars(pair.sym, bars)
           const closes = bars.map(b => b.close)
           const rsi = calcRSI(closes)
           const { macdLine } = calcMACD(closes)
           setPairs(prev2 => prev2.map(p =>
             p.id !== id ? p : { ...p, history: bars, rsi, macd: macdLine, px: bars[bars.length - 1].close }
           ))
-          logEvent("feed", `${pair.sym} · ${bars.length} H1 bars loaded`)
+          logEvent("feed", `${pair.sym} · ${bars.length} H1 bars ${fromCache ? "cached (market closed)" : "loaded"}`)
         }).catch(() => logEvent("feed", `${pair.sym} · bar fetch failed`))
       }
       return next
@@ -503,6 +519,8 @@ export default function TradeApp() {
             totalPairs={pairs.length}
             aiEnabled={aiSettings.settings.useAI}
             aiProvider={aiSettings.settings.activeProvider}
+            barsLoaded={barsReadyCount}
+            totalActive={activePairsList.length}
           />
         )}
       </div>

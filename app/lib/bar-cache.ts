@@ -43,3 +43,9 @@ export function setCachedBars(sym: string, bars: OHLCBar[]) {
   store[sym] = { bars, savedAt: Date.now() }
   write(store)
 }
+
+/** Returns cached bars regardless of TTL — used as weekend/closed-market fallback */
+export function getCachedBarsAnyAge(sym: string): OHLCBar[] | null {
+  const slot = read()[sym]
+  return slot?.bars ?? null
+}

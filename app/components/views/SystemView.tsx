@@ -10,6 +10,8 @@ interface Props {
   totalPairs: number
   aiEnabled: boolean
   aiProvider: string
+  barsLoaded: number
+  totalActive: number
 }
 
 const AUDIT_STYLES: Record<string, string> = {
@@ -44,7 +46,7 @@ function KVRow({ k, v }: { k: string; v: string | number }) {
   )
 }
 
-export default function SystemView({ auditLog, metrics, wsConnected, activePairs, totalPairs, aiEnabled, aiProvider }: Props) {
+export default function SystemView({ auditLog, metrics, wsConnected, activePairs, totalPairs, aiEnabled, aiProvider, barsLoaded, totalActive }: Props) {
   const [tick, setTick] = useState(0)
   const [mountTime] = useState(() => Date.now())
 
@@ -68,20 +70,22 @@ export default function SystemView({ auditLog, metrics, wsConnected, activePairs
     ? Math.round((metrics.tpCount / (metrics.tpCount + metrics.slCount)) * 100)
     : null
 
+  const barsOk = totalActive > 0 && barsLoaded >= totalActive
+
   const feeds = [
     {
       name: "Twelve Data WS",
       status: (wsConnected ? "ok" : "error") as "ok" | "stale" | "error",
       latency: wsConnected ? 28 + Math.floor(Math.sin(tick) * 8) : 0,
       msgsPerMin: wsConnected ? activePairs * 75 : 0,
-      note: wsConnected ? undefined : "Reconnecting…",
+      note: wsConnected ? "Live price ticks" : "Reconnecting…",
     },
     {
-      name: "Price Simulator",
-      status: "ok" as const,
+      name: "Twelve Data REST",
+      status: (barsOk ? "ok" : "stale") as "ok" | "stale" | "error",
       latency: 0,
-      msgsPerMin: activePairs * 75,
-      note: "800ms tick · always live",
+      msgsPerMin: 0,
+      note: totalActive === 0 ? "Waiting…" : `${barsLoaded}/${totalActive} pairs with H1 history`,
     },
     {
       name: `AI — ${aiProvider}`,
@@ -90,18 +94,11 @@ export default function SystemView({ auditLog, metrics, wsConnected, activePairs
       msgsPerMin: 0,
       note: aiEnabled ? `Last call ${metrics.lastAILatency ? metrics.lastAILatency + "ms" : "—"}` : "API key not configured",
     },
-    {
-      name: "OANDA REST",
-      status: "stale" as const,
-      latency: 0,
-      msgsPerMin: 0,
-      note: "API key not configured",
-    },
   ]
 
-  const allOk = wsConnected && aiEnabled
-  const statusLabel = allOk ? "ALL SYSTEMS OPERATIONAL" : wsConnected ? "AI NOT CONFIGURED" : "FEED DISCONNECTED"
-  const statusColor = allOk ? "#00ff88" : wsConnected ? "#ffb800" : "#ff3d5a"
+  const allOk = wsConnected && aiEnabled && barsOk
+  const statusLabel = allOk ? "ALL SYSTEMS OPERATIONAL" : !wsConnected ? "FEED DISCONNECTED" : !aiEnabled ? "AI NOT CONFIGURED" : "LOADING MARKET DATA"
+  const statusColor = allOk ? "#00ff88" : wsConnected && aiEnabled ? "#ffb800" : "#ff3d5a"
 
   return (
     <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
