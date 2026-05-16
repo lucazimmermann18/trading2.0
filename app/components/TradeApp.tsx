@@ -29,6 +29,7 @@ import { useNotificationSettings } from "@/app/hooks/useNotificationSettings"
 import { useZoneWatcher } from "@/app/hooks/useZoneWatcher"
 import { computeZones, type WatchedZone, ZONE_RECOMPUTE_MS } from "@/app/lib/zones"
 import { useSignalLifecycle, type ResolvedSignal } from "@/app/hooks/useSignalLifecycle"
+import { loadHistory, saveHistory, patchHistoryEntry } from "@/app/lib/history-store"
 
 
 export default function TradeApp() {
@@ -44,7 +45,7 @@ export default function TradeApp() {
   const [toast, setToast] = useState<{ pair: Pair; signal: NonNullable<Pair["signal"]> } | null>(null)
   const [resolvedToast, setResolvedToast] = useState<ResolvedSignal | null>(null)
   const [view, setView] = useState<ViewId>("dashboard")
-  const [history, setHistory] = useState<HistoryEntry[]>([])
+  const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory())
   const [sessions, setSessions] = useState(activeSessions())
   const [unread, setUnread] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -62,6 +63,11 @@ export default function TradeApp() {
   const logEvent = useCallback((kind: AuditKind, msg: string) => {
     setAuditLog(prev => [{ id: auditIdRef.current++, time: Date.now(), kind, msg }, ...prev].slice(0, 120))
   }, [])
+
+  // Persist signal history to localStorage on every change
+  useEffect(() => {
+    saveHistory(history)
+  }, [history])
 
   // Live WebSocket prices
   const activeSymbols = pairs.filter(p => p.active).map(p => p.sym)
@@ -419,6 +425,8 @@ export default function TradeApp() {
       else if (newState === "TP2") logEvent("tp", `${entry.sym} TP2 hit · ${pnlStr} (full target)`)
       else if (newState === "EXPIRED") logEvent("scan", `${entry.sym} signal expired — setup no longer valid`)
       else logEvent("sl", `${entry.sym} stop loss hit · ${pnlStr}`)
+      // Patch the persisted entry immediately so a page reload shows the resolved state
+      patchHistoryEntry(entry.sym, entry.time, { state: newState, pnl_r })
       setMetrics(prev => ({
         ...prev,
         tpCount: newState !== "SL" && newState !== "EXPIRED" ? prev.tpCount + 1 : prev.tpCount,
