@@ -14,6 +14,8 @@ import PerformanceView from "./views/PerformanceView"
 import JournalView from "./views/JournalView"
 import ReplayView from "./views/ReplayView"
 import SystemView from "./views/SystemView"
+import MTFView from "./views/MTFView"
+import CalendarStrip from "./CalendarStrip"
 import type { Pair, HistoryEntry, ViewId, Timeframe, AuditEntry, AuditKind, SystemMetrics } from "@/app/lib/types"
 import {
   buildInitialState,
@@ -31,6 +33,7 @@ import { useZoneWatcher } from "@/app/hooks/useZoneWatcher"
 import { computeZones, type WatchedZone, ZONE_RECOMPUTE_MS } from "@/app/lib/zones"
 import { useSignalLifecycle, type ResolvedSignal } from "@/app/hooks/useSignalLifecycle"
 import { loadHistory, saveHistory, patchHistoryEntry } from "@/app/lib/history-store"
+import { useEconomicCalendar } from "@/app/hooks/useEconomicCalendar"
 
 
 // ── Custom pair storage ───────────────────────────────────────
@@ -80,6 +83,7 @@ export default function TradeApp() {
   const aiSettings = useAISettings()
   const notifSettings = useNotificationSettings()
   const { loaded: persLoaded, state: persState, save: persSave } = usePersistedState()
+  const { upcoming: calendarUpcoming, minutesUntil, getBlockingEvent } = useEconomicCalendar()
 
   const logEvent = useCallback((kind: AuditKind, msg: string) => {
     setAuditLog(prev => [{ id: auditIdRef.current++, time: Date.now(), kind, msg }, ...prev].slice(0, 120))
@@ -285,6 +289,23 @@ export default function TradeApp() {
       setScanning(false)
       return
     }
+
+    // News gate: pause scan if high-impact event within ±30 min for any active pair currency
+    const activeCurrencies = Array.from(new Set(activePairs.flatMap(p => {
+      const parts = p.sym.split("/")
+      if (parts.length === 2) return parts
+      const map: Record<string, string> = { US100: "USD", US500: "USD", US30: "USD", GER40: "EUR", WTI: "USD", NATGAS: "USD" }
+      return map[p.sym] ? [map[p.sym]] : ["USD"]
+    })))
+    const blockingEvent = getBlockingEvent(activeCurrencies, 30)
+    if (blockingEvent) {
+      const minsUntil = minutesUntil(blockingEvent)
+      const when = minsUntil > 0 ? `in ${minsUntil}m` : `${Math.abs(minsUntil)}m ago`
+      logEvent("scan", `⚠ Scan paused: ${blockingEvent.currency} ${blockingEvent.event} ${when} — waiting for news to clear`)
+      setScanning(false)
+      return
+    }
+
     logEvent("scan", `Scan started — ${activePairs.length} pairs · ${activeSess.filter(s => s.active).map(s => s.label).join("+")} session`)
 
     const results = new Map<number, NonNullable<Pair["signal"]> | null>()
@@ -524,6 +545,11 @@ export default function TradeApp() {
       else logEvent("sl", `${entry.sym} stop loss hit · ${pnlStr}`)
       // Patch the persisted entry immediately so a page reload shows the resolved state
       patchHistoryEntry(entry.sym, entry.time, { state: newState, pnl_r })
+      // Push lifecycle update to Telegram/Discord
+      notifSettings.sendLifecycleUpdate({
+        sym: entry.sym, side: entry.side, state: newState,
+        pnl_r, entry: entry.entry, digits: entry.digits,
+      })
       setMetrics(prev => ({
         ...prev,
         tpCount: newState !== "SL" && newState !== "EXPIRED" ? prev.tpCount + 1 : prev.tpCount,
@@ -636,6 +662,9 @@ export default function TradeApp() {
         wsConnected={wsConnected}
       />
 
+      {/* Economic calendar strip */}
+      <CalendarStrip upcoming={calendarUpcoming} minutesUntil={minutesUntil} />
+
       {/* WS status banner */}
       {wsBanner && (
         <div className={`h-8 flex items-center justify-between px-4 text-[11px] font-medium tracking-[0.12em] transition shrink-0
@@ -704,6 +733,7 @@ export default function TradeApp() {
             patchHistoryEntry(sym, time, { notes })
             setHistory(prev => prev.map(h => h.sym === sym && h.time === time ? { ...h, notes } : h))
           }} />}
+        {view === "mtf"          && <MTFView pairs={pairs} selectedId={selectedId} onSelectPair={handleOpenPair} />}
         {view === "replay"       && <ReplayView history={history} pairs={pairs} />}
         {view === "system" && (
           <SystemView
