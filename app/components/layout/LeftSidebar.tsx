@@ -128,25 +128,25 @@ function PairRow({
   return (
     <div
       onClick={onSelect}
-      className={`relative rounded-lg px-3 py-2.5 cursor-pointer transition group
+      className={`relative rounded-lg px-3 py-3 md:py-2.5 cursor-pointer transition group
         ${selected ? "bg-white/[0.05] border-white/15" : "bg-white/[0.015] hover:bg-white/[0.035] border-white/[0.06]"}
         border ${trade ? "animate-tradePulse" : ""} ${!p.active ? "opacity-55" : ""}`}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="text-[12.5px] font-semibold tracking-tight text-white">{p.sym}</div>
+          <div className="text-[13px] md:text-[12.5px] font-semibold tracking-tight text-white">{p.sym}</div>
           <span className="text-[9px] tracking-[0.16em] text-mute uppercase">{p.group}</span>
         </div>
         <button
           onClick={onToggle}
-          className={`relative w-7 h-4 rounded-full transition ${p.active ? "bg-accent-blue/60" : "bg-white/10"}`}
+          className={`relative w-8 h-[18px] md:w-7 md:h-4 rounded-full transition shrink-0 ${p.active ? "bg-accent-blue/60" : "bg-white/10"}`}
         >
-          <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${p.active ? "left-3.5" : "left-0.5"}`}/>
+          <span className={`absolute top-[3px] md:top-0.5 w-3 h-3 rounded-full bg-white transition-all ${p.active ? "left-4 md:left-3.5" : "left-0.5"}`}/>
         </button>
       </div>
 
       <div className="mt-1.5 flex items-end justify-between">
-        <div className="num text-[15px] font-semibold text-white tabular-nums leading-none">{fmt(p.px, p.digits)}</div>
+        <div className="num text-[16px] md:text-[15px] font-semibold text-white tabular-nums leading-none">{fmt(p.px, p.digits)}</div>
         <div className="text-[10px] text-mute num">sp {p.spread.toFixed(p.spread < 1 ? 2 : 1)}</div>
       </div>
 

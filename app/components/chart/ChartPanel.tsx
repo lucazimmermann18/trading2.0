@@ -665,7 +665,7 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
   return (
     <div className={`flex-1 flex flex-col panel border-t-0 border-b-0 m-2 rounded-xl overflow-hidden relative ${trade ? "animate-glowBorder" : ""}`}>
       {/* Toolbar */}
-      <div className="h-12 flex items-center px-4 border-b hairline gap-3 shrink-0">
+      <div className="h-12 flex items-center px-3 md:px-4 border-b hairline gap-2 md:gap-3 shrink-0 overflow-hidden">
         <div className="flex items-center gap-2">
           <div className="text-[15px] font-semibold text-white tracking-tight">{pair.sym}</div>
           <div className="text-[10px] text-mute tracking-[0.14em] uppercase hidden xl:block">{pair.name}</div>
@@ -676,67 +676,70 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
         </div>
 
         {trade && pair.signal && (
-          <div className={`flex items-center gap-1.5 px-2.5 h-6 rounded-[5px] text-[10px] font-bold tracking-[0.18em]
+          <div className={`flex items-center gap-1.5 px-2.5 h-6 rounded-[5px] text-[10px] font-bold tracking-[0.18em] shrink-0
             ${pair.signal.side === "BUY" ? "bg-accent-green/20 text-accent-green" : "bg-accent-red/20 text-accent-red"}`}>
             ⚡ {pair.signal.side} · {pair.signal.confidence}%
           </div>
         )}
 
-        <div className="flex-1" />
+        {/* Right-side controls — scrollable on mobile */}
+        <div className="flex items-center gap-1 md:gap-1.5 overflow-x-auto scrollbar-none ml-auto shrink-0 max-w-[55%] md:max-w-none">
 
-        {/* SMC overlay toggle */}
-        <div className="flex items-center gap-1 px-1 py-0.5 rounded-md glass">
-          <button
-            onClick={() => setSmcVisible(s => !s)}
-            title="Toggle SMC zones: Order Blocks, FVGs, Sweeps, PDH/PDL, Liquidity"
-            className={`h-7 px-2.5 rounded-[5px] text-[11px] font-medium num transition
-              ${smcVisible ? "bg-white/[0.08]" : "text-mute hover:text-white"}`}
-            style={smcVisible ? { color: "#a78bfa" } : {}}
-          >
-            SMC
-          </button>
-        </div>
-
-        {/* Indicator toggles */}
-        <div className="flex items-center gap-1 px-1 py-0.5 rounded-md glass">
-          {INDS.map(ind => (
+          {/* SMC overlay toggle */}
+          <div className="flex items-center gap-1 px-1 py-0.5 rounded-md glass shrink-0">
             <button
-              key={ind.key}
-              onClick={() => toggleIndicator(ind.key)}
+              onClick={() => setSmcVisible(s => !s)}
+              title="Toggle SMC zones: Order Blocks, FVGs, Sweeps, PDH/PDL, Liquidity"
               className={`h-7 px-2.5 rounded-[5px] text-[11px] font-medium num transition
-                ${indicators[ind.key]
-                  ? "bg-white/[0.08] text-white"
-                  : "text-mute hover:text-white"}`}
-              style={indicators[ind.key] ? { color: ind.color } : {}}
+                ${smcVisible ? "bg-white/[0.08]" : "text-mute hover:text-white"}`}
+              style={smcVisible ? { color: "#a78bfa" } : {}}
             >
-              {ind.label}
+              SMC
             </button>
-          ))}
-        </div>
+          </div>
 
-        {/* Chart type */}
-        <div className="flex items-center gap-1 px-1 py-0.5 rounded-md glass">
-          <button onClick={() => setChartType("candle")}
-            className={`h-7 px-2.5 rounded-[5px] text-[11px] font-medium transition ${chartType === "candle" ? "bg-white/[0.08] text-white" : "text-mute hover:text-white"}`}>
-            Candles
-          </button>
-          <button onClick={() => setChartType("line")}
-            className={`h-7 px-2.5 rounded-[5px] text-[11px] font-medium transition ${chartType === "line" ? "bg-white/[0.08] text-white" : "text-mute hover:text-white"}`}>
-            Line
-          </button>
-        </div>
+          {/* Indicator toggles */}
+          <div className="flex items-center gap-1 px-1 py-0.5 rounded-md glass shrink-0">
+            {INDS.map(ind => (
+              <button
+                key={ind.key}
+                onClick={() => toggleIndicator(ind.key)}
+                className={`h-7 px-2.5 rounded-[5px] text-[11px] font-medium num transition
+                  ${indicators[ind.key]
+                    ? "bg-white/[0.08] text-white"
+                    : "text-mute hover:text-white"}`}
+                style={indicators[ind.key] ? { color: ind.color } : {}}
+              >
+                {ind.label}
+              </button>
+            ))}
+          </div>
 
-        {/* Timeframe dropdown */}
-        <select
-          value={timeframe}
-          onChange={e => setTimeframe(e.target.value as Timeframe)}
-          className="h-7 px-2 rounded-md glass text-[11px] font-medium num text-white border border-white/[0.08]
-            bg-ink-900 cursor-pointer focus:outline-none focus:border-accent-blue/50 transition"
-        >
-          {TIMEFRAMES.map(tf => (
-            <option key={tf} value={tf}>{tf}</option>
-          ))}
-        </select>
+          {/* Chart type */}
+          <div className="flex items-center gap-1 px-1 py-0.5 rounded-md glass shrink-0">
+            <button onClick={() => setChartType("candle")}
+              className={`h-7 px-2.5 rounded-[5px] text-[11px] font-medium transition ${chartType === "candle" ? "bg-white/[0.08] text-white" : "text-mute hover:text-white"}`}>
+              Candles
+            </button>
+            <button onClick={() => setChartType("line")}
+              className={`h-7 px-2.5 rounded-[5px] text-[11px] font-medium transition ${chartType === "line" ? "bg-white/[0.08] text-white" : "text-mute hover:text-white"}`}>
+              Line
+            </button>
+          </div>
+
+          {/* Timeframe dropdown */}
+          <select
+            value={timeframe}
+            onChange={e => setTimeframe(e.target.value as Timeframe)}
+            className="h-7 px-2 rounded-md glass text-[11px] font-medium num text-white border border-white/[0.08]
+              bg-ink-900 cursor-pointer focus:outline-none focus:border-accent-blue/50 transition shrink-0"
+          >
+            {TIMEFRAMES.map(tf => (
+              <option key={tf} value={tf}>{tf}</option>
+            ))}
+          </select>
+
+        </div>
       </div>
 
       {/* Chart area + sub-charts */}

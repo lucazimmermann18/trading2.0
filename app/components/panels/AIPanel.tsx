@@ -114,9 +114,9 @@ interface Props {
 
 function Section({ label, sub, children }: { label: string; sub?: string; children: React.ReactNode }) {
   return (
-    <div className="px-4 py-3.5 border-b hairline">
-      <div className="flex items-center justify-between mb-2.5">
-        <div className="text-[10px] tracking-[0.18em] uppercase text-mute">{label}</div>
+    <div className="px-4 py-3 md:py-3.5 border-b hairline">
+      <div className="flex items-center justify-between mb-2 md:mb-2.5">
+        <div className="text-[10.5px] md:text-[10px] tracking-[0.18em] uppercase text-mute font-medium">{label}</div>
         {sub && <div className="text-[10px] text-mute">{sub}</div>}
       </div>
       {children}
@@ -126,8 +126,8 @@ function Section({ label, sub, children }: { label: string; sub?: string; childr
 
 function KV({ label, v, color }: { label: string; v: string; color: string }) {
   return (
-    <div className="flex items-center justify-between px-2 py-1.5 rounded-md bg-white/[0.025]">
-      <span className="text-mute text-[10px] tracking-[0.14em]">{label}</span>
+    <div className="flex items-center justify-between px-2 py-2 md:py-1.5 rounded-md bg-white/[0.025]">
+      <span className="text-mute text-[10.5px] md:text-[10px] tracking-[0.14em]">{label}</span>
       <span className="num text-[11px]" style={{ color }}>{v}</span>
     </div>
   )
@@ -139,7 +139,7 @@ function SkillsetSelect({ value, onChange }: { value: string; onChange: (s: stri
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full h-9 px-3 rounded-md glass flex items-center justify-between text-[12px]"
+        className="w-full h-10 md:h-9 px-3 rounded-md glass flex items-center justify-between text-[12px]"
       >
         <span className="text-white">{value}</span>
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5"
@@ -148,12 +148,12 @@ function SkillsetSelect({ value, onChange }: { value: string; onChange: (s: stri
         </svg>
       </button>
       {open && (
-        <div className="absolute z-30 top-10 left-0 right-0 panel rounded-md p-1 shadow-2xl border border-white/[0.06]">
+        <div className="absolute z-30 top-11 md:top-10 left-0 right-0 panel rounded-md p-1 shadow-2xl border border-white/[0.06]">
           {SKILLSETS.map(s => (
             <button
               key={s}
               onClick={() => { onChange(s); setOpen(false) }}
-              className={`w-full text-left px-2.5 h-8 rounded text-[12px] flex items-center justify-between hover:bg-white/[0.05] transition
+              className={`w-full text-left px-2.5 h-10 md:h-8 rounded text-[12px] flex items-center justify-between hover:bg-white/[0.05] transition
                 ${s === value ? "text-accent-blue" : "text-white/85"}`}
             >
               <span>{s}</span>
@@ -293,8 +293,8 @@ export default function AIPanel({ pair, skillset, setSkillset, history, threshol
           </div>
         </div>
         <div className="mt-2 flex items-center gap-2">
-          <div className="text-[14px] text-white font-medium tracking-tight">{pair.sym}</div>
-          <span className={`px-1.5 h-4 rounded text-[9px] font-bold tracking-[0.16em] flex items-center
+          <div className="text-[15px] md:text-[14px] text-white font-semibold tracking-tight">{pair.sym}</div>
+          <span className={`px-2 h-5 rounded text-[10px] md:text-[9px] font-bold tracking-[0.16em] flex items-center
             ${trade ? "bg-accent-green/15 text-accent-green" : "bg-white/[0.04] text-mute"}`}>
             {trade ? "TRADE" : "NO TRADE"}
           </span>
@@ -307,7 +307,7 @@ export default function AIPanel({ pair, skillset, setSkillset, history, threshol
           <button
             onClick={handleManualScan}
             disabled={isScanning}
-            className={`w-full h-9 rounded-md flex items-center justify-center gap-2 text-[11px] font-bold tracking-[0.18em] transition
+            className={`w-full h-11 md:h-9 rounded-md flex items-center justify-center gap-2 text-[11px] font-bold tracking-[0.18em] transition
               ${isScanning
                 ? "bg-accent-blue/10 text-accent-blue/50 cursor-not-allowed"
                 : "bg-accent-blue/15 text-accent-blue hover:bg-accent-blue/25 active:scale-[0.98]"}`}

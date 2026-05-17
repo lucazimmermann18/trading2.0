@@ -726,7 +726,7 @@ export default function SettingsModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-riseIn"
       onClick={e => { if (e.target === overlayRef.current) onClose() }}
     >
-      <div className="w-[900px] max-h-[86vh] panel rounded-xl flex flex-col overflow-hidden shadow-2xl">
+      <div className="w-full max-h-[100dvh] md:w-[900px] md:max-h-[86vh] panel rounded-none md:rounded-xl flex flex-col overflow-hidden shadow-2xl">
         {/* Header */}
         <div className="h-12 px-4 flex items-center justify-between border-b hairline shrink-0">
           <div className="flex items-center gap-2.5">
@@ -746,14 +746,14 @@ export default function SettingsModal({
           </button>
         </div>
 
-        <div className="flex flex-1 min-h-0 overflow-hidden">
+        <div className="flex flex-1 min-h-0 overflow-hidden flex-col md:flex-row">
           {/* Sidebar */}
-          <div className="w-[200px] border-r hairline p-2 space-y-0.5 shrink-0">
+          <div className="flex flex-row overflow-x-auto scrollbar-none gap-1 p-2 border-b hairline shrink-0 md:flex-col md:w-[200px] md:border-b-0 md:border-r md:space-y-0.5">
             {TABS.map(t => (
               <button
                 key={t.k}
                 onClick={() => setTab(t.k)}
-                className={`w-full text-left px-3 h-9 rounded-md text-[12px] transition flex items-center gap-2.5
+                className={`shrink-0 whitespace-nowrap md:w-full text-left px-3 h-9 rounded-md text-[12px] transition flex items-center gap-2.5
                   ${tab === t.k
                     ? "bg-accent-blue/10 text-accent-blue border border-accent-blue/20"
                     : "text-mute hover:text-white hover:bg-white/[0.03] border border-transparent"}`}
@@ -805,7 +805,7 @@ export default function SettingsModal({
           </div>
 
           {/* Content */}
-          <div className="flex-1 overflow-y-auto p-5 min-h-0">
+          <div className="flex-1 overflow-y-auto p-4 md:p-5 min-h-0">
             {tab === "ai-models"  && <AIModelsTab aiSettings={aiSettings} />}
             {tab === "pairs"      && <PairsTab pairs={pairs} onTogglePair={onTogglePair} onAddPair={onAddPair} onRemovePair={onRemovePair} />}
             {tab === "strategy"   && <StrategyTab skillset={skillset} setSkillset={setSkillset} threshold={threshold} setThreshold={setThreshold} />}
@@ -816,8 +816,8 @@ export default function SettingsModal({
         </div>
 
         {/* Footer */}
-        <div className="h-12 px-4 flex items-center justify-between border-t hairline shrink-0">
-          <div className="text-[10.5px] text-mute">
+        <div className="h-12 px-3 md:px-4 flex items-center justify-between border-t hairline shrink-0">
+          <div className="hidden md:block text-[10.5px] text-mute">
             Changes to AI keys and models are saved automatically
           </div>
           <div className="flex items-center gap-2">
