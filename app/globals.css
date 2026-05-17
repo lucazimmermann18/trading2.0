@@ -11,7 +11,11 @@ body {
   color: #fff;
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
+/* Touch-friendly minimum tap target */
+button { touch-action: manipulation; }
 
 /* ===== Scrollbar ===== */
 ::-webkit-scrollbar { width: 4px; height: 4px; }

@@ -59,7 +59,7 @@ export default function CalendarStrip({ upcoming, minutesUntil }: Props) {
   if (upcoming.length === 0) return null
 
   return (
-    <div className="h-9 border-b border-amber-500/15 bg-amber-500/[0.03] flex items-center px-4 gap-2 overflow-x-auto shrink-0 scrollbar-none">
+    <div className="h-8 md:h-9 border-b border-amber-500/15 bg-amber-500/[0.03] flex items-center px-3 md:px-4 gap-2 overflow-x-auto shrink-0 scrollbar-none">
       <div className="flex items-center gap-1.5 shrink-0 text-[9.5px] tracking-[0.16em] uppercase text-amber-500/70 font-semibold">
         <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>

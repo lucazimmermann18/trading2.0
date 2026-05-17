@@ -280,7 +280,7 @@ export default function AIPanel({ pair, skillset, setSkillset, history, threshol
     : smc?.structure.zone === "PREMIUM" ? "#ff3d5a" : "#ffffff50"
 
   return (
-    <aside className="w-[320px] shrink-0 panel border-t-0 border-b-0 border-r-0 flex flex-col">
+    <aside className="w-full md:w-[320px] shrink-0 panel border-t-0 border-b-0 border-r-0 flex flex-col">
       {/* Header */}
       <div className="px-4 pt-4 pb-3 border-b hairline shrink-0">
         <div className="flex items-center justify-between">

@@ -77,6 +77,8 @@ export default function TradeApp() {
   const [toast, setToast] = useState<{ pair: Pair; signal: NonNullable<Pair["signal"]> } | null>(null)
   const [resolvedToast, setResolvedToast] = useState<ResolvedSignal | null>(null)
   const [view, setView] = useState<ViewId>("dashboard")
+  const [mobilePanelView, setMobilePanelView] = useState<"pairs" | "chart" | "ai">("chart")
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory())
   const [sessions, setSessions] = useState(activeSessions())
   const [unread, setUnread] = useState(0)
@@ -734,6 +736,7 @@ export default function TradeApp() {
   const handleOpenPair = (id: number) => {
     setSelectedId(id)
     setView("dashboard")
+    setMobilePanelView("chart")
   }
 
   const selected = pairs.find(p => p.id === selectedId) ?? pairs[0]
@@ -744,7 +747,18 @@ export default function TradeApp() {
     </div>
   )
 
-  const isFullView = view !== "dashboard"
+  // Mobile navigation helpers
+  const handleMobileNav = (v: ViewId) => {
+    setView(v)
+    if (v === "journal" || v === "performance") setUnread(0)
+    setMobilePanelView("chart")
+    setMobileMoreOpen(false)
+  }
+  const handleMobileSelectPair = (id: number) => {
+    setSelectedId(id)
+    setView("dashboard")
+    setMobilePanelView("chart")
+  }
 
   return (
     <div className="flex flex-col h-screen bg-ink-950 overflow-hidden">
@@ -779,76 +793,220 @@ export default function TradeApp() {
         </div>
       )}
 
-      <div className="flex flex-1 min-h-0">
-        <NavRail
-          view={view}
-          setView={v => {
-            setView(v)
-            if (v === "journal" || v === "performance") setUnread(0)
-          }}
-          badges={{ journal: unread }}
-        />
+      {/* Main body */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
 
-        <LeftSidebar
-          pairs={pairs}
-          selectedId={selectedId}
-          onSelect={id => { setSelectedId(id); if (isFullView) setView("dashboard") }}
-          onToggleActive={onToggleActive}
-          secondsLeft={secondsLeft}
-          strategicSecsLeft={strategicSecsLeft}
-          scanning={scanning}
-          scannerOn={scannerOn}
-          zones={zones}
-          warmupDone={warmupDone}
-          barsReady={barsReadyCount}
-          totalActive={activePairsList.length}
-          sessionAllowed={sessionGate.allowed}
-          sessionReason={sessionGate.reason}
-          currentSessions={sessionGate.currentSessions}
-        />
-
-        {/* Main content area */}
-        {view === "dashboard" && (
-          <>
-            <ChartPanel pair={selected} timeframe={timeframe} setTimeframe={handleSetTimeframe} />
-            <AIPanel
-              pair={selected}
-              skillset={skillset}
-              setSkillset={handleSetSkillset}
-              history={history}
-              threshold={threshold}
-              setThreshold={handleSetThreshold}
-              scanning={scanning}
-              onScanPair={() => runPairScan(selected, "Manual")}
-              aiConfigured={aiSettings.settings.useAI && !!aiSettings.settings.apiKeys[aiSettings.settings.activeProvider]}
-            />
-          </>
-        )}
-
-        {view === "multichart"   && <MultiChartView pairs={pairs} onOpen={handleOpenPair} />}
-        {view === "heatmap"      && <HeatmapView pairs={pairs} />}
-        {view === "performance"  && <PerformanceView history={history} />}
-        {view === "journal"      && <JournalView history={history} onOpen={setSelectedSignal} onUpdateNote={(sym, time, notes) => {
-            patchHistoryEntry(sym, time, { notes })
-            setHistory(prev => prev.map(h => h.sym === sym && h.time === time ? { ...h, notes } : h))
-          }} />}
-        {view === "mtf"          && <MTFView pairs={pairs} selectedId={selectedId} onSelectPair={handleOpenPair} />}
-        {view === "intermarket"  && <IntermarketView />}
-        {view === "replay"       && <ReplayView history={history} pairs={pairs} />}
-        {view === "system" && (
-          <SystemView
-            auditLog={auditLog}
-            metrics={metrics}
-            wsConnected={wsConnected}
-            activePairs={pairs.filter(p => p.active).length}
-            totalPairs={pairs.length}
-            aiEnabled={aiSettings.settings.useAI}
-            aiProvider={aiSettings.settings.activeProvider}
-            barsLoaded={barsReadyCount}
-            totalActive={activePairsList.length}
+        {/* NavRail — desktop only */}
+        <div className="hidden md:flex shrink-0">
+          <NavRail
+            view={view}
+            setView={v => {
+              setView(v)
+              if (v === "journal" || v === "performance") setUnread(0)
+            }}
+            badges={{ journal: unread }}
           />
-        )}
+        </div>
+
+        {/* LeftSidebar — desktop always visible, mobile only on "pairs" tab */}
+        <div className={`${mobilePanelView === "pairs" ? "flex" : "hidden"} md:flex flex-col overflow-hidden shrink-0 md:shrink-0 w-full md:w-auto`}>
+          <LeftSidebar
+            pairs={pairs}
+            selectedId={selectedId}
+            onSelect={id => {
+              setSelectedId(id)
+              setView("dashboard")
+              setMobilePanelView("chart")
+            }}
+            onToggleActive={onToggleActive}
+            secondsLeft={secondsLeft}
+            strategicSecsLeft={strategicSecsLeft}
+            scanning={scanning}
+            scannerOn={scannerOn}
+            zones={zones}
+            warmupDone={warmupDone}
+            barsReady={barsReadyCount}
+            totalActive={activePairsList.length}
+            sessionAllowed={sessionGate.allowed}
+            sessionReason={sessionGate.reason}
+            currentSessions={sessionGate.currentSessions}
+          />
+        </div>
+
+        {/* Chart / Views area — desktop always visible, mobile only on "chart" tab */}
+        <div className={`${mobilePanelView === "chart" ? "flex" : "hidden"} md:flex flex-1 min-w-0 overflow-hidden`}>
+          {view === "dashboard" && (
+            <>
+              <ChartPanel pair={selected} timeframe={timeframe} setTimeframe={handleSetTimeframe} />
+              {/* AIPanel inside chart area on desktop only */}
+              <div className="hidden md:flex shrink-0">
+                <AIPanel
+                  pair={selected}
+                  skillset={skillset}
+                  setSkillset={handleSetSkillset}
+                  history={history}
+                  threshold={threshold}
+                  setThreshold={handleSetThreshold}
+                  scanning={scanning}
+                  onScanPair={() => runPairScan(selected, "Manual")}
+                  aiConfigured={aiSettings.settings.useAI && !!aiSettings.settings.apiKeys[aiSettings.settings.activeProvider]}
+                />
+              </div>
+            </>
+          )}
+          {view === "multichart"   && <MultiChartView pairs={pairs} onOpen={handleOpenPair} />}
+          {view === "heatmap"      && <HeatmapView pairs={pairs} />}
+          {view === "performance"  && <PerformanceView history={history} />}
+          {view === "journal"      && <JournalView history={history} onOpen={setSelectedSignal} onUpdateNote={(sym, time, notes) => {
+              patchHistoryEntry(sym, time, { notes })
+              setHistory(prev => prev.map(h => h.sym === sym && h.time === time ? { ...h, notes } : h))
+            }} />}
+          {view === "mtf"          && <MTFView pairs={pairs} selectedId={selectedId} onSelectPair={handleOpenPair} />}
+          {view === "intermarket"  && <IntermarketView />}
+          {view === "replay"       && <ReplayView history={history} pairs={pairs} />}
+          {view === "system" && (
+            <SystemView
+              auditLog={auditLog}
+              metrics={metrics}
+              wsConnected={wsConnected}
+              activePairs={pairs.filter(p => p.active).length}
+              totalPairs={pairs.length}
+              aiEnabled={aiSettings.settings.useAI}
+              aiProvider={aiSettings.settings.activeProvider}
+              barsLoaded={barsReadyCount}
+              totalActive={activePairsList.length}
+            />
+          )}
+        </div>
+
+        {/* AIPanel — mobile only "ai" tab, desktop never (it lives inside chart area above) */}
+        <div className={`${mobilePanelView === "ai" ? "flex" : "hidden"} md:hidden flex-col w-full overflow-hidden`}>
+          <AIPanel
+            pair={selected}
+            skillset={skillset}
+            setSkillset={handleSetSkillset}
+            history={history}
+            threshold={threshold}
+            setThreshold={handleSetThreshold}
+            scanning={scanning}
+            onScanPair={() => runPairScan(selected, "Manual")}
+            aiConfigured={aiSettings.settings.useAI && !!aiSettings.settings.apiKeys[aiSettings.settings.activeProvider]}
+          />
+        </div>
       </div>
+
+      {/* Mobile bottom navigation bar */}
+      <div className="md:hidden flex items-stretch border-t border-white/[0.08] bg-ink-950 shrink-0">
+        {([
+          {
+            id: "pairs" as const,
+            label: "Pairs",
+            icon: (
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M3 6h18M3 12h18M3 18h18"/>
+              </svg>
+            ),
+            badge: pairs.filter(p => p.status === "TRADE").length,
+          },
+          {
+            id: "chart" as const,
+            label: "Chart",
+            icon: (
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M3 17l6-6 4 4 8-8"/>
+              </svg>
+            ),
+            badge: 0,
+          },
+          {
+            id: "ai" as const,
+            label: "AI",
+            icon: (
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+              </svg>
+            ),
+            badge: 0,
+          },
+        ] as const).map(tab => {
+          const active = mobilePanelView === tab.id
+          return (
+            <button
+              key={tab.id}
+              onClick={() => {
+                if (tab.id === "ai") setView("dashboard")
+                setMobilePanelView(tab.id)
+              }}
+              className={`flex-1 flex flex-col items-center justify-center gap-1 py-2 transition relative
+                ${active ? "text-accent-blue" : "text-mute"}`}
+            >
+              {active && <span className="absolute top-0 left-4 right-4 h-[2px] rounded-full bg-accent-blue" />}
+              <span className="relative">
+                {tab.icon}
+                {tab.badge > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-1 rounded-full bg-accent-red text-[9px] font-bold text-white flex items-center justify-center">
+                    {tab.badge}
+                  </span>
+                )}
+              </span>
+              <span className="text-[10px] font-medium tracking-[0.08em]">{tab.label}</span>
+            </button>
+          )
+        })}
+
+        {/* More button */}
+        <button
+          onClick={() => setMobileMoreOpen(o => !o)}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-2 transition relative
+            ${mobileMoreOpen ? "text-accent-blue" : "text-mute"}`}
+        >
+          {mobileMoreOpen && <span className="absolute top-0 left-4 right-4 h-[2px] rounded-full bg-accent-blue" />}
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/>
+            <rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/>
+          </svg>
+          <span className="text-[10px] font-medium tracking-[0.08em]">Views</span>
+        </button>
+      </div>
+
+      {/* Mobile "More" views sheet */}
+      {mobileMoreOpen && (
+        <div className="md:hidden fixed inset-0 z-40 flex flex-col justify-end" onClick={() => setMobileMoreOpen(false)}>
+          <div className="bg-ink-900 border-t border-white/[0.08] rounded-t-2xl p-4 pb-8" onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-4" />
+            <div className="text-[10px] tracking-[0.18em] uppercase text-mute mb-3">Views</div>
+            <div className="grid grid-cols-3 gap-2">
+              {([
+                { id: "dashboard",   label: "Dashboard",   icon: <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 13l9-9 9 9"/><path d="M5 11v10h14V11"/></svg> },
+                { id: "multichart",  label: "Multi-Chart", icon: <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg> },
+                { id: "heatmap",     label: "Heatmap",     icon: <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> },
+                { id: "performance", label: "Performance", icon: <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg> },
+                { id: "journal",     label: "Journal",     icon: <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 4h12l4 4v12H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg> },
+                { id: "mtf",         label: "MTF",         icon: <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="2" width="20" height="5" rx="1"/><rect x="2" y="9" width="13" height="5" rx="1"/><rect x="2" y="16" width="8" height="5" rx="1"/></svg> },
+                { id: "intermarket", label: "Intermarket", icon: <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 17l4-5 4 3 4-6 4 4"/></svg> },
+                { id: "replay",      label: "Replay",      icon: <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.5"><polygon points="5 3 19 12 5 21 5 3"/></svg> },
+                { id: "system",      label: "System",      icon: <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 22h8M12 18v4"/></svg> },
+              ] as { id: ViewId; label: string; icon: React.ReactNode }[]).map(it => (
+                <button
+                  key={it.id}
+                  onClick={() => handleMobileNav(it.id)}
+                  className={`flex flex-col items-center gap-2 p-3 rounded-xl border transition
+                    ${view === it.id
+                      ? "border-accent-blue/40 bg-accent-blue/10 text-accent-blue"
+                      : "border-white/[0.06] bg-white/[0.02] text-mute"}`}
+                >
+                  {it.icon}
+                  <span className="text-[10px] font-medium tracking-[0.06em]">{it.label}</span>
+                  {it.id === "journal" && unread > 0 && (
+                    <span className="text-[9px] text-accent-red font-bold">● {unread}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       <ResolutionToast
         resolved={resolvedToast}
@@ -860,7 +1018,7 @@ export default function TradeApp() {
         pair={toast?.pair ?? null}
         onDismiss={() => setToast(null)}
         onView={() => {
-          if (toast) { setSelectedId(toast.pair.id); setView("dashboard"); setToast(null) }
+          if (toast) { setSelectedId(toast.pair.id); setView("dashboard"); setMobilePanelView("chart"); setToast(null) }
         }}
       />
 

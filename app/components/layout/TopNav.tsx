@@ -12,23 +12,23 @@ interface Props {
 
 export default function TopNav({ scannerOn, setScannerOn, notifications, sessions, onOpenSettings, wsConnected }: Props) {
   return (
-    <div className="h-[60px] flex items-center px-5 panel border-l-0 border-r-0 border-t-0 shrink-0">
+    <div className="h-[52px] md:h-[60px] flex items-center px-3 md:px-5 panel border-l-0 border-r-0 border-t-0 shrink-0">
       {/* Brand */}
-      <div className="flex items-center gap-2.5 w-[260px] shrink-0">
-        <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
+      <div className="flex items-center gap-2 md:gap-2.5 md:w-[260px] shrink-0">
+        <svg width="20" height="20" viewBox="0 0 32 32" fill="none">
           <path d="M4 22 12 10l5 7 4-5 7 10" stroke="#00d4ff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
           <circle cx="17" cy="17" r="2.4" fill="#00ff88"/>
         </svg>
         <div className="leading-tight">
-          <div className="text-[15px] font-semibold tracking-tight text-white">
+          <div className="text-[14px] md:text-[15px] font-semibold tracking-tight text-white">
             TradeAI <span className="text-accent-blue">Pro</span>
           </div>
-          <div className="text-[10px] text-mute tracking-[0.18em] uppercase">Institutional Signal Engine</div>
+          <div className="hidden md:block text-[10px] text-mute tracking-[0.18em] uppercase">Institutional Signal Engine</div>
         </div>
       </div>
 
-      {/* Sessions */}
-      <div className="flex-1 flex items-center justify-center">
+      {/* Sessions - desktop only */}
+      <div className="hidden md:flex flex-1 items-center justify-center">
         <div className="flex items-center gap-1 px-1 py-1 rounded-md glass">
           {sessions.map(s => (
             <div
@@ -45,10 +45,20 @@ export default function TopNav({ scannerOn, setScannerOn, notifications, session
         </div>
       </div>
 
+      {/* Mobile: active session dot */}
+      <div className="md:hidden flex-1 flex items-center px-2">
+        {sessions.some(s => s.active) && (
+          <div className="flex items-center gap-1.5 text-[10px] text-accent-green">
+            <span className="w-1.5 h-1.5 rounded-full bg-accent-green animate-pulseDot" style={{ boxShadow: "0 0 6px rgba(0,255,136,0.8)" }} />
+            {sessions.filter(s => s.active).map(s => s.label).join("/")}
+          </div>
+        )}
+      </div>
+
       {/* Right controls */}
-      <div className="flex items-center gap-2">
-        {/* WebSocket indicator */}
-        <div className={`h-7 px-2.5 rounded-md flex items-center gap-1.5 text-[10px] font-medium tracking-[0.12em] border transition
+      <div className="flex items-center gap-1.5 md:gap-2">
+        {/* WebSocket indicator - desktop only */}
+        <div className={`hidden md:flex h-7 px-2.5 rounded-md items-center gap-1.5 text-[10px] font-medium tracking-[0.12em] border transition
           ${wsConnected
             ? "border-accent-blue/30 text-accent-blue bg-accent-blue/[0.06]"
             : "border-white/[0.06] text-mute"}`}>
@@ -57,9 +67,15 @@ export default function TopNav({ scannerOn, setScannerOn, notifications, session
           {wsConnected ? "WS LIVE" : "WS OFF"}
         </div>
 
+        {/* Mobile: WS dot only */}
+        <div className="md:hidden">
+          <span className={`w-2 h-2 rounded-full block ${wsConnected ? "bg-accent-blue animate-pulseDot" : "bg-white/20"}`}
+            style={wsConnected ? { boxShadow: "0 0 6px rgba(0,212,255,0.8)" } : {}} />
+        </div>
+
         <button
           onClick={() => setScannerOn(!scannerOn)}
-          className={`h-8 px-3 rounded-md flex items-center gap-2 text-[11px] font-semibold tracking-[0.14em] transition
+          className={`h-8 px-2 md:px-3 rounded-md flex items-center gap-1.5 md:gap-2 text-[10px] md:text-[11px] font-semibold tracking-[0.12em] md:tracking-[0.14em] transition
             ${scannerOn
               ? "bg-accent-green/10 text-accent-green border border-accent-green/40"
               : "btn-ghost text-mute border border-transparent"}`}
@@ -68,7 +84,8 @@ export default function TopNav({ scannerOn, setScannerOn, notifications, session
             className={`dot ${scannerOn ? "bg-accent-green animate-pulseDot" : "bg-mute"}`}
             style={scannerOn ? { boxShadow: "0 0 6px rgba(0,255,136,0.8)" } : {}}
           />
-          SCANNER {scannerOn ? "ON" : "OFF"}
+          <span className="hidden sm:inline">SCANNER </span>
+          {scannerOn ? "ON" : "OFF"}
         </button>
 
         <button className="relative w-9 h-9 rounded-md btn-ghost flex items-center justify-center text-mute hover:text-white">
@@ -92,7 +109,7 @@ export default function TopNav({ scannerOn, setScannerOn, notifications, session
           </svg>
         </button>
 
-        <div className="w-9 h-9 rounded-md btn-ghost flex items-center justify-center text-mute">
+        <div className="hidden md:flex w-9 h-9 rounded-md btn-ghost items-center justify-center text-mute">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5">
             <circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>
           </svg>
