@@ -12,6 +12,7 @@ export interface Pair {
   signal: Signal | null
   lastScan: number
   history: OHLCBar[]
+  h4History?: OHLCBar[]
   reasoning: string
   confidence: number
   rsi: number
@@ -80,7 +81,7 @@ export interface Session {
   active: boolean
 }
 
-export type ViewId = "dashboard" | "multichart" | "heatmap" | "performance" | "journal" | "replay" | "system"
+export type ViewId = "dashboard" | "multichart" | "heatmap" | "performance" | "journal" | "replay" | "system" | "mtf"
 export type Timeframe = "M1" | "M5" | "M15" | "H1" | "H4" | "D1"
 
 export type AuditKind = "scan" | "signal" | "zone" | "tp" | "sl" | "config" | "ai" | "feed"
@@ -98,4 +99,16 @@ export interface SystemMetrics {
   tpCount: number
   slCount: number
   lastAILatency: number
+}
+
+export interface EconomicEvent {
+  date: string
+  time: string
+  country: string
+  currency: string
+  impact: "high" | "medium" | "low"
+  event: string
+  actual?: string
+  forecast?: string
+  previous?: string
 }

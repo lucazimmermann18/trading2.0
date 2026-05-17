@@ -80,10 +80,29 @@ export function useNotificationSettings() {
           discordWebhookUrl: s.discordWebhookUrl,
         }),
       })
-    } catch {
-      // silent fail — notification is non-critical
-    }
+    } catch { /* silent */ }
   }, [])
 
-  return { settings, save, setField, sendSignal }
+  const sendLifecycleUpdate = useCallback(async (update: {
+    sym: string; side: "BUY"|"SELL"; state: string; pnl_r?: number; entry: number; digits: number
+  }) => {
+    const s = load()
+    if (!s.channels.telegram && !s.channels.webhook && !s.channels.discord) return
+    try {
+      await fetch("/api/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "lifecycle", lifecycle: update,
+          channels: s.channels,
+          telegramToken: s.telegramToken,
+          telegramChatId: s.telegramChatId,
+          webhookUrl: s.webhookUrl,
+          discordWebhookUrl: s.discordWebhookUrl,
+        }),
+      })
+    } catch { /* silent */ }
+  }, [])
+
+  return { settings, save, setField, sendSignal, sendLifecycleUpdate }
 }

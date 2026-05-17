@@ -331,8 +331,8 @@ function aggregateToD1(h1Bars: OHLCBar[]): OHLCBar[] {
 
 // ── H4 Order Blocks ────────────────────────────────────────────
 
-function detectH4OrderBlocks(h1Bars: OHLCBar[], px: number): OrderBlock[] {
-  const h4 = aggregateToH4(h1Bars)
+function detectH4OrderBlocks(h1Bars: OHLCBar[], px: number, h4Bars?: OHLCBar[]): OrderBlock[] {
+  const h4 = h4Bars && h4Bars.length >= 5 ? h4Bars : aggregateToH4(h1Bars)
   if (h4.length < 5) return []
   return detectOrderBlocks(h4, px).slice(0, 3)
 }
@@ -466,15 +466,15 @@ function buildDailyContext(h1Bars: OHLCBar[], px: number): DailyContext {
 
 // ── Main entry point ───────────────────────────────────────────
 
-export function buildSMCContext(bars: OHLCBar[], px: number): SMCContext {
+export function buildSMCContext(bars: OHLCBar[], px: number, h4Bars?: OHLCBar[]): SMCContext {
   return {
-    structure:    analyzeStructure(bars, px),
-    orderBlocks:  detectOrderBlocks(bars, px),
-    h4OrderBlocks: detectH4OrderBlocks(bars, px),
-    fvgs:         detectFVGs(bars, px),
-    liquidity:    detectLiquidity(bars, px),
-    sweeps:       detectLiquiditySweeps(bars),
-    divergence:   detectRSIDivergence(bars),
-    daily:        buildDailyContext(bars, px),
+    structure:     analyzeStructure(bars, px),
+    orderBlocks:   detectOrderBlocks(bars, px),
+    h4OrderBlocks: detectH4OrderBlocks(bars, px, h4Bars),
+    fvgs:          detectFVGs(bars, px),
+    liquidity:     detectLiquidity(bars, px),
+    sweeps:        detectLiquiditySweeps(bars),
+    divergence:    detectRSIDivergence(bars),
+    daily:         buildDailyContext(bars, px),
   }
 }

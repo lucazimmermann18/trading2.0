@@ -1,4 +1,5 @@
 import dynamic from "next/dynamic"
+import ErrorBoundary from "./components/ErrorBoundary"
 
 const TradeApp = dynamic(() => import("./components/TradeApp"), {
   ssr: false,
@@ -10,5 +11,9 @@ const TradeApp = dynamic(() => import("./components/TradeApp"), {
 })
 
 export default function Home() {
-  return <TradeApp />
+  return (
+    <ErrorBoundary>
+      <TradeApp />
+    </ErrorBoundary>
+  )
 }

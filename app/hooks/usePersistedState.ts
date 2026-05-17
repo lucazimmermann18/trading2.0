@@ -14,7 +14,7 @@ interface PersistedState {
 const DEFAULTS: PersistedState = {
   activePairIds: [0, 1, 2, 3, 4, 5, 6, 7],
   skillset: "Smart Money Concepts",
-  threshold: 75,
+  threshold: 82,
   timeframe: "H1",
   scannerOn: true,
 }

@@ -3,6 +3,7 @@ import { useState } from "react"
 import type { Pair } from "@/app/lib/types"
 import { fmt } from "@/app/lib/market-data"
 import { type WatchedZone, zoneColor } from "@/app/lib/zones"
+import { getCacheAgeMinutes } from "@/app/lib/bar-cache"
 
 interface Props {
   pairs: Pair[]
@@ -94,6 +95,7 @@ function PairRow({
 }) {
   const trade = p.status === "TRADE"
   const sigSide = p.signal?.side
+  const cacheAge = getCacheAgeMinutes(p.sym)
   // Nearest zone to current price
   const nearest = pairZones.sort((a, b) => Math.abs(a.price - p.px) - Math.abs(b.price - p.px))[0]
 
@@ -139,6 +141,18 @@ function PairRow({
         ) : (
           <div className="px-2 h-5 rounded-[4px] text-[10px] font-bold tracking-[0.18em] bg-white/[0.04] text-mute flex items-center whitespace-nowrap">
             NO TRADE
+          </div>
+        )}
+        {/* Cache freshness badge */}
+        {cacheAge != null && cacheAge >= 60 && (
+          <div
+            className="flex items-center gap-1 px-1.5 h-5 rounded-[4px] text-[9px] whitespace-nowrap bg-white/[0.04] text-mute"
+            title={`Data cached ${cacheAge}m ago`}
+          >
+            <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>
+            </svg>
+            {cacheAge >= 60 ? `${Math.floor(cacheAge / 60)}h` : `${cacheAge}m`}
           </div>
         )}
         {/* Zone indicator */}

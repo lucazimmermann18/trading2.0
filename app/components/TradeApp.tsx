@@ -14,14 +14,17 @@ import PerformanceView from "./views/PerformanceView"
 import JournalView from "./views/JournalView"
 import ReplayView from "./views/ReplayView"
 import SystemView from "./views/SystemView"
+import MTFView from "./views/MTFView"
+import CalendarStrip from "./CalendarStrip"
 import type { Pair, HistoryEntry, ViewId, Timeframe, AuditEntry, AuditKind, SystemMetrics } from "@/app/lib/types"
 import {
   buildInitialState,
   activeSessions, buildMarketContext, calcRSI, calcMACD,
-  buildConfluences, SIGNAL_EXPIRY_MS,
+  buildConfluences, SIGNAL_EXPIRY_MS, buildCorrelationMatrix,
 } from "@/app/lib/market-data"
 import { fetchBars } from "@/app/lib/twelvedata"
-import { getCachedBars, isCacheStale, setCachedBars } from "@/app/lib/bar-cache"
+import { getCachedBars, getCachedBarsAnyAge, isCacheStale, setCachedBars,
+         getCachedH4Bars, getCachedH4BarsAnyAge, setCachedH4Bars } from "@/app/lib/bar-cache"
 import { useAISettings } from "@/app/hooks/useAISettings"
 import { useTwelveDataWS } from "@/app/hooks/useTwelveDataWS"
 import { usePersistedState } from "@/app/hooks/usePersistedState"
@@ -29,14 +32,36 @@ import { useNotificationSettings } from "@/app/hooks/useNotificationSettings"
 import { useZoneWatcher } from "@/app/hooks/useZoneWatcher"
 import { computeZones, type WatchedZone, ZONE_RECOMPUTE_MS } from "@/app/lib/zones"
 import { useSignalLifecycle, type ResolvedSignal } from "@/app/hooks/useSignalLifecycle"
+import { loadHistory, saveHistory, patchHistoryEntry } from "@/app/lib/history-store"
+import { useEconomicCalendar } from "@/app/hooks/useEconomicCalendar"
 
+
+// ── Custom pair storage ───────────────────────────────────────
+const CUSTOM_PAIRS_KEY = "tradeai_custom_pairs_v1"
+interface CustomPairDef { sym: string; name: string; group: string; digits: number; spread: number }
+
+function loadCustomDefs(): CustomPairDef[] {
+  if (typeof window === "undefined") return []
+  try { return JSON.parse(localStorage.getItem(CUSTOM_PAIRS_KEY) ?? "[]") } catch { return [] }
+}
+function saveCustomDefs(defs: CustomPairDef[]) {
+  try { localStorage.setItem(CUSTOM_PAIRS_KEY, JSON.stringify(defs)) } catch {}
+}
+function guessDigits(sym: string): number {
+  if (sym.includes("JPY")) return 3
+  if (sym.includes("XAU") || sym.includes("XAG")) return 2
+  if (/BTC|ETH|SOL|AVAX/.test(sym)) return 2
+  if (/XRP|DOGE/.test(sym)) return 4
+  if (/[A-Z]+\/[A-Z]+/.test(sym)) return 5
+  return 2
+}
 
 export default function TradeApp() {
   const [pairs, setPairs] = useState<Pair[]>([])
   const [selectedId, setSelectedId] = useState(7) // XAU/USD
   const [timeframe, setTimeframe] = useState<Timeframe>("H1")
   const [skillset, setSkillset] = useState("Smart Money Concepts")
-  const [threshold, setThreshold] = useState(75)
+  const [threshold, setThreshold] = useState(82)
   const [scannerOn, setScannerOn] = useState(true)
   const persistedAppliedRef = useRef(false)
   const [secondsLeft, setSecondsLeft] = useState(272)
@@ -44,7 +69,7 @@ export default function TradeApp() {
   const [toast, setToast] = useState<{ pair: Pair; signal: NonNullable<Pair["signal"]> } | null>(null)
   const [resolvedToast, setResolvedToast] = useState<ResolvedSignal | null>(null)
   const [view, setView] = useState<ViewId>("dashboard")
-  const [history, setHistory] = useState<HistoryEntry[]>([])
+  const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory())
   const [sessions, setSessions] = useState(activeSessions())
   const [unread, setUnread] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -58,10 +83,16 @@ export default function TradeApp() {
   const aiSettings = useAISettings()
   const notifSettings = useNotificationSettings()
   const { loaded: persLoaded, state: persState, save: persSave } = usePersistedState()
+  const { upcoming: calendarUpcoming, minutesUntil, getBlockingEvent } = useEconomicCalendar()
 
   const logEvent = useCallback((kind: AuditKind, msg: string) => {
     setAuditLog(prev => [{ id: auditIdRef.current++, time: Date.now(), kind, msg }, ...prev].slice(0, 120))
   }, [])
+
+  // Persist signal history to localStorage on every change
+  useEffect(() => {
+    saveHistory(history)
+  }, [history])
 
   // Live WebSocket prices
   const activeSymbols = pairs.filter(p => p.active).map(p => p.sym)
@@ -80,6 +111,26 @@ export default function TradeApp() {
       }))
     },
   })
+
+  // WS reconnect banner
+  const [wsBanner, setWsBanner] = useState<"disconnected" | "reconnected" | null>(null)
+  const prevWsConnected = useRef<boolean | null>(null)
+  const wsBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (prevWsConnected.current === null) { prevWsConnected.current = wsConnected; return }
+    const prev = prevWsConnected.current
+    prevWsConnected.current = wsConnected
+    if (prev && !wsConnected) {
+      if (wsBannerTimerRef.current) clearTimeout(wsBannerTimerRef.current)
+      setWsBanner("disconnected")
+      logEvent("feed", "⚠ WebSocket disconnected — reconnecting…")
+    } else if (!prev && wsConnected) {
+      if (wsBannerTimerRef.current) clearTimeout(wsBannerTimerRef.current)
+      setWsBanner("reconnected")
+      logEvent("feed", "✓ WebSocket reconnected — live prices restored")
+      wsBannerTimerRef.current = setTimeout(() => setWsBanner(null), 4000)
+    }
+  }, [wsConnected, logEvent])
 
   const barFetchRef = useRef(false)
 
@@ -105,28 +156,71 @@ export default function TradeApp() {
         px: cached[cached.length - 1].close,
       }
     })
-    setPairs(hydratedPairs)
+    // Load custom pairs from localStorage and append
+    const customDefs = loadCustomDefs()
+    const customPairs: Pair[] = customDefs.map((def, i) => {
+      const id = 1000 + i
+      const cached = getCachedBars(def.sym)
+      const closes = cached?.map(b => b.close) ?? []
+      return {
+        id, sym: def.sym, name: def.name, group: def.group, digits: def.digits,
+        spread: def.spread, vol: 0, px: cached ? cached[cached.length - 1].close : 0,
+        active: true, status: "NO TRADE" as const, signal: null, lastScan: 0,
+        history: cached ?? [], h4History: undefined,
+        reasoning: "Waiting for market data…", confidence: 0,
+        rsi: closes.length ? calcRSI(closes) : 50,
+        macd: closes.length ? calcMACD(closes).macdLine : 0,
+      }
+    })
+    const allPairs = [...hydratedPairs, ...customPairs]
+    setPairs(allPairs)
 
     // Pass 2: refresh entries that are missing or older than 1 h
     let fetchIdx = 0
-    hydratedPairs.filter(p => p.active).forEach(p => {
+    allPairs.filter(p => p.active).forEach(p => {
       const needsFetch = p.history.length < 50 || isCacheStale(p.sym)
       if (!needsFetch) return
 
-      const delay = fetchIdx++ * 500          // stagger to stay inside rate limit
+      const delay = fetchIdx++ * 500
       setTimeout(async () => {
         try {
-          const bars = await fetchBars(p.sym, "H1", 220)
-          if (!bars.length) return
-          setCachedBars(p.sym, bars)
+          // H1 fetch
+          let bars = await fetchBars(p.sym, "H1", 220)
+          let fromCache = false
+          if (!bars.length) {
+            const stale = getCachedBarsAnyAge(p.sym)
+            if (stale?.length) { bars = stale; fromCache = true }
+          }
+          if (!bars.length) { logEvent("feed", `${p.sym} · no data — market may be closed`); return }
+          if (!fromCache) setCachedBars(p.sym, bars)
+
+          // H4 fetch (in parallel, staggered +200ms to avoid rate limit)
+          const h4Bars = getCachedH4Bars(p.sym)
+          if (!h4Bars) {
+            setTimeout(async () => {
+              try {
+                let fetched = await fetchBars(p.sym, "H4", 150)
+                if (!fetched.length) {
+                  const stale = getCachedH4BarsAnyAge(p.sym)
+                  if (stale?.length) fetched = stale
+                }
+                if (fetched.length) {
+                  setCachedH4Bars(p.sym, fetched)
+                  setPairs(prev => prev.map(q => q.id !== p.id ? q : { ...q, h4History: fetched }))
+                }
+              } catch { /* non-critical */ }
+            }, 200)
+          }
+
           const closes = bars.map(b => b.close)
           const rsi = calcRSI(closes)
           const { macdLine } = calcMACD(closes)
           setPairs(prev => prev.map(pair =>
             pair.id !== p.id ? pair
-              : { ...pair, history: bars, rsi, macd: macdLine, px: bars[bars.length - 1].close }
+              : { ...pair, history: bars, h4History: h4Bars ?? pair.h4History, rsi, macd: macdLine, px: bars[bars.length - 1].close }
           ))
-          logEvent("feed", `${p.sym} · ${bars.length} H1 bars ${p.history.length < 50 ? "loaded" : "refreshed"}`)
+          const label = fromCache ? "cached (market closed)" : p.history.length < 50 ? "loaded" : "refreshed"
+          logEvent("feed", `${p.sym} · ${bars.length} H1${h4Bars ? ` + ${h4Bars.length} H4` : ""} bars ${label}`)
         } catch {
           logEvent("feed", `${p.sym} · bar fetch failed`)
         }
@@ -179,13 +273,40 @@ export default function TradeApp() {
     }
 
     setScanning(true)
+
+    // Session gate: skip scan entirely if outside London / New York hours
+    const activeSess = activeSessions()
+    const sessionActive = activeSess.some(s => (s.key === "london" || s.key === "ny") && s.active)
+    if (!sessionActive) {
+      logEvent("scan", "Scan skipped — outside London/NY session (low liquidity)")
+      setScanning(false)
+      return
+    }
+
     const activePairs = pairs.filter(p => p.active && p.history.length >= 50)
     if (!activePairs.length) {
       logEvent("feed", "Scan skipped — waiting for market data to finish loading")
       setScanning(false)
       return
     }
-    logEvent("scan", `Scan started — ${activePairs.length} pair${activePairs.length !== 1 ? "s" : ""}`)
+
+    // News gate: pause scan if high-impact event within ±30 min for any active pair currency
+    const activeCurrencies = Array.from(new Set(activePairs.flatMap(p => {
+      const parts = p.sym.split("/")
+      if (parts.length === 2) return parts
+      const map: Record<string, string> = { US100: "USD", US500: "USD", US30: "USD", GER40: "EUR", WTI: "USD", NATGAS: "USD" }
+      return map[p.sym] ? [map[p.sym]] : ["USD"]
+    })))
+    const blockingEvent = getBlockingEvent(activeCurrencies, 30)
+    if (blockingEvent) {
+      const minsUntil = minutesUntil(blockingEvent)
+      const when = minsUntil > 0 ? `in ${minsUntil}m` : `${Math.abs(minsUntil)}m ago`
+      logEvent("scan", `⚠ Scan paused: ${blockingEvent.currency} ${blockingEvent.event} ${when} — waiting for news to clear`)
+      setScanning(false)
+      return
+    }
+
+    logEvent("scan", `Scan started — ${activePairs.length} pairs · ${activeSess.filter(s => s.active).map(s => s.label).join("+")} session`)
 
     const results = new Map<number, NonNullable<Pair["signal"]> | null>()
     const latencies: number[] = []
@@ -194,6 +315,28 @@ export default function TradeApp() {
       activePairs.map(async p => {
         try {
           const ctx = buildMarketContext(p)
+
+          // Client-side pre-filter: skip if spread > 0.08% (execution slippage kills edge)
+          const spreadPct = (p.spread / p.px) * 100
+          if (spreadPct > 0.08) {
+            logEvent("scan", `${p.sym} · skipped — spread ${spreadPct.toFixed(3)}% too wide`)
+            results.set(p.id, null)
+            return
+          }
+
+          // Client-side pre-filter: skip if price not near any SMC level
+          const atr = ctx.atr
+          const px = p.px
+          const nearOB = ctx.smc.orderBlocks.some(ob => px >= ob.low - atr * 0.4 && px <= ob.high + atr * 0.4)
+          const nearH4OB = ctx.smc.h4OrderBlocks.some(ob => px >= ob.low - atr * 0.5 && px <= ob.high + atr * 0.5)
+          const nearFVG = ctx.smc.fvgs.some(fvg => px >= fvg.bottom - atr * 0.3 && px <= fvg.top + atr * 0.3)
+          const hasSweep = ctx.smc.sweeps.length > 0
+          if (!nearOB && !nearH4OB && !nearFVG && !hasSweep) {
+            logEvent("scan", `${p.sym} · skipped — price not near any OB/FVG/sweep`)
+            results.set(p.id, null)
+            return
+          }
+
           const t0 = Date.now()
           const res = await fetch("/api/ai/analyze", {
             method: "POST",
@@ -226,7 +369,7 @@ export default function TradeApp() {
             results.set(p.id, {
               side: data.side, confidence: data.confidence,
               entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
-              rr: data.rr ?? "2.50", tf: timeframe, skillset,
+              rr: data.rr ?? "3.00", tf: timeframe, skillset,
               why: data.reasoning, time: now,
               expiresAt: now + (SIGNAL_EXPIRY_MS[timeframe] ?? SIGNAL_EXPIRY_MS.H1),
               confluences: buildConfluences(ctx.smc, data.side),
@@ -241,14 +384,37 @@ export default function TradeApp() {
     const avgLat = latencies.length ? Math.round(latencies.reduce((s, v) => s + v, 0) / latencies.length) : 0
     let sigCount = 0
 
+    // Collect signals and detect correlated pairs firing simultaneously
+    const signalPairs: Array<{ p: Pair; sig: NonNullable<Pair["signal"]> }> = []
     for (const [pairId, sig] of Array.from(results)) {
       if (!sig) continue
       sigCount++
       const p = activePairs.find(ap => ap.id === pairId)!
+      signalPairs.push({ p, sig })
       setToast({ pair: p, signal: sig })
       setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 200))
       setUnread(u => u + 1)
       notifSettings.sendSignal({ ...sig, sym: p.sym, digits: p.digits })
+    }
+
+    // Correlation warning: warn when 2+ signals share highly correlated pairs
+    if (signalPairs.length >= 2) {
+      const matrix = buildCorrelationMatrix(pairs)
+      const warned = new Set<string>()
+      for (let i = 0; i < signalPairs.length; i++) {
+        for (let j = i + 1; j < signalPairs.length; j++) {
+          const symA = signalPairs[i].p.sym
+          const symB = signalPairs[j].p.sym
+          const key = [symA, symB].sort().join("|")
+          if (warned.has(key)) continue
+          const rowA = matrix.find(r => r.sym === symA)
+          const idxB = matrix.findIndex(r => r.sym === symB)
+          if (rowA && idxB !== -1 && Math.abs(rowA.row[idxB]) > 0.7) {
+            warned.add(key)
+            logEvent("signal", `⚠ Correlation warning: ${symA} & ${symB} are highly correlated (${(rowA.row[idxB] * 100).toFixed(0)}%) — consider sizing down`)
+          }
+        }
+      }
     }
 
     setPairs(prev => prev.map(p => {
@@ -329,7 +495,7 @@ export default function TradeApp() {
           sig = {
             side: data.side, confidence: data.confidence,
             entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
-            rr: data.rr ?? "2.50", tf: timeframe, skillset,
+            rr: data.rr ?? "3.00", tf: timeframe, skillset,
             why: `[${triggerLabel}] ${data.reasoning}`, time: now,
             expiresAt: now + (SIGNAL_EXPIRY_MS[timeframe] ?? SIGNAL_EXPIRY_MS.H1),
             confluences: buildConfluences(ctx.smc, data.side),
@@ -377,6 +543,13 @@ export default function TradeApp() {
       else if (newState === "TP2") logEvent("tp", `${entry.sym} TP2 hit · ${pnlStr} (full target)`)
       else if (newState === "EXPIRED") logEvent("scan", `${entry.sym} signal expired — setup no longer valid`)
       else logEvent("sl", `${entry.sym} stop loss hit · ${pnlStr}`)
+      // Patch the persisted entry immediately so a page reload shows the resolved state
+      patchHistoryEntry(entry.sym, entry.time, { state: newState, pnl_r })
+      // Push lifecycle update to Telegram/Discord
+      notifSettings.sendLifecycleUpdate({
+        sym: entry.sym, side: entry.side, state: newState,
+        pnl_r, entry: entry.entry, digits: entry.digits,
+      })
       setMetrics(prev => ({
         ...prev,
         tpCount: newState !== "SL" && newState !== "EXPIRED" ? prev.tpCount + 1 : prev.tpCount,
@@ -400,16 +573,22 @@ export default function TradeApp() {
       persSave({ activePairIds: next.filter(p => p.active).map(p => p.id) })
       const pair = next.find(p => p.id === id)
       if (pair?.active && pair.history.length < 50) {
-        fetchBars(pair.sym, "H1", 220).then(bars => {
-          if (!bars.length) return
-          setCachedBars(pair.sym, bars)
+        fetchBars(pair.sym, "H1", 220).then(apiBars => {
+          let bars = apiBars
+          let fromCache = false
+          if (!bars.length) {
+            const stale = getCachedBarsAnyAge(pair.sym)
+            if (stale?.length) { bars = stale; fromCache = true }
+          }
+          if (!bars.length) { logEvent("feed", `${pair.sym} · no data — market may be closed`); return }
+          if (!fromCache) setCachedBars(pair.sym, bars)
           const closes = bars.map(b => b.close)
           const rsi = calcRSI(closes)
           const { macdLine } = calcMACD(closes)
           setPairs(prev2 => prev2.map(p =>
             p.id !== id ? p : { ...p, history: bars, rsi, macd: macdLine, px: bars[bars.length - 1].close }
           ))
-          logEvent("feed", `${pair.sym} · ${bars.length} H1 bars loaded`)
+          logEvent("feed", `${pair.sym} · ${bars.length} H1 bars ${fromCache ? "cached (market closed)" : "loaded"}`)
         }).catch(() => logEvent("feed", `${pair.sym} · bar fetch failed`))
       }
       return next
@@ -420,6 +599,42 @@ export default function TradeApp() {
   const handleSetThreshold = (v: number) => { setThreshold(v); persSave({ threshold: v }); logEvent("config", `Signal threshold → ${v}%`) }
   const handleSetTimeframe = (v: Timeframe) => { setTimeframe(v); persSave({ timeframe: v }); logEvent("config", `Timeframe → ${v}`) }
   const handleSetScannerOn = (v: boolean) => { setScannerOn(v); persSave({ scannerOn: v }); logEvent("config", v ? "AI Scanner started" : "AI Scanner paused") }
+
+  const handleAddCustomPair = (sym: string, group: string) => {
+    const digits = guessDigits(sym)
+    const existingCustom = pairs.filter(p => p.id >= 1000)
+    const id = 1000 + existingCustom.length
+    const def: CustomPairDef = { sym, name: sym, group, digits, spread: 1.0 }
+    const defs = loadCustomDefs()
+    saveCustomDefs([...defs, def])
+    const newPair: Pair = {
+      id, sym, name: sym, group, digits, spread: 1.0, vol: 0, px: 0,
+      active: true, status: "NO TRADE" as const, signal: null, lastScan: 0,
+      history: [], h4History: undefined,
+      reasoning: "Waiting for market data…", confidence: 0, rsi: 50, macd: 0,
+    }
+    setPairs(prev => [...prev, newPair])
+    logEvent("config", `Added custom pair: ${sym}`)
+    // Fetch bars immediately
+    fetchBars(sym, "H1", 220).then(bars => {
+      if (!bars.length) return
+      setCachedBars(sym, bars)
+      const closes = bars.map(b => b.close)
+      setPairs(prev => prev.map(p =>
+        p.id !== id ? p : { ...p, history: bars, rsi: calcRSI(closes), macd: calcMACD(closes).macdLine, px: bars[bars.length - 1].close }
+      ))
+      logEvent("feed", `${sym} · ${bars.length} H1 bars loaded`)
+    }).catch(() => logEvent("feed", `${sym} · bar fetch failed — check symbol`))
+  }
+
+  const handleRemoveCustomPair = (id: number) => {
+    const p = pairs.find(q => q.id === id)
+    if (!p) return
+    setPairs(prev => prev.filter(q => q.id !== id))
+    const defs = loadCustomDefs().filter(d => d.sym !== p.sym)
+    saveCustomDefs(defs)
+    logEvent("config", `Removed custom pair: ${p.sym}`)
+  }
 
   const handleOpenPair = (id: number) => {
     setSelectedId(id)
@@ -446,6 +661,28 @@ export default function TradeApp() {
         onOpenSettings={() => setSettingsOpen(true)}
         wsConnected={wsConnected}
       />
+
+      {/* Economic calendar strip */}
+      <CalendarStrip upcoming={calendarUpcoming} minutesUntil={minutesUntil} />
+
+      {/* WS status banner */}
+      {wsBanner && (
+        <div className={`h-8 flex items-center justify-between px-4 text-[11px] font-medium tracking-[0.12em] transition shrink-0
+          ${wsBanner === "disconnected"
+            ? "bg-amber-500/10 border-b border-amber-500/20 text-amber-400"
+            : "bg-accent-green/10 border-b border-accent-green/20 text-accent-green"}`}
+        >
+          <div className="flex items-center gap-2">
+            <span className={`w-1.5 h-1.5 rounded-full ${wsBanner === "disconnected" ? "bg-amber-400 animate-pulse" : "bg-accent-green"}`}/>
+            {wsBanner === "disconnected"
+              ? "⚠ WebSocket disconnected — reconnecting automatically…"
+              : "✓ WebSocket reconnected — live prices restored"}
+          </div>
+          {wsBanner === "disconnected" && (
+            <button onClick={() => setWsBanner(null)} className="text-amber-400/60 hover:text-amber-400 transition">✕</button>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-1 min-h-0">
         <NavRail
@@ -492,7 +729,11 @@ export default function TradeApp() {
         {view === "multichart"   && <MultiChartView pairs={pairs} onOpen={handleOpenPair} />}
         {view === "heatmap"      && <HeatmapView pairs={pairs} />}
         {view === "performance"  && <PerformanceView history={history} />}
-        {view === "journal"      && <JournalView history={history} onOpen={setSelectedSignal} />}
+        {view === "journal"      && <JournalView history={history} onOpen={setSelectedSignal} onUpdateNote={(sym, time, notes) => {
+            patchHistoryEntry(sym, time, { notes })
+            setHistory(prev => prev.map(h => h.sym === sym && h.time === time ? { ...h, notes } : h))
+          }} />}
+        {view === "mtf"          && <MTFView pairs={pairs} selectedId={selectedId} onSelectPair={handleOpenPair} />}
         {view === "replay"       && <ReplayView history={history} pairs={pairs} />}
         {view === "system" && (
           <SystemView
@@ -503,6 +744,8 @@ export default function TradeApp() {
             totalPairs={pairs.length}
             aiEnabled={aiSettings.settings.useAI}
             aiProvider={aiSettings.settings.activeProvider}
+            barsLoaded={barsReadyCount}
+            totalActive={activePairsList.length}
           />
         )}
       </div>
@@ -531,6 +774,8 @@ export default function TradeApp() {
         onClose={() => setSettingsOpen(false)}
         pairs={pairs}
         onTogglePair={onToggleActive}
+        onAddPair={handleAddCustomPair}
+        onRemovePair={handleRemoveCustomPair}
         skillset={skillset}
         setSkillset={handleSetSkillset}
         threshold={threshold}

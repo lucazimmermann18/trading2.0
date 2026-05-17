@@ -17,13 +17,16 @@ interface Signal {
   digits: number
 }
 
+interface LifecycleUpdate {
+  sym: string; side: "BUY" | "SELL"; state: string
+  pnl_r?: number; entry: number; digits: number
+}
+
 interface NotifyRequest {
-  signal: Signal
-  channels: {
-    telegram: boolean
-    webhook: boolean
-    discord: boolean
-  }
+  type?: "signal" | "lifecycle"
+  signal?: Signal
+  lifecycle?: LifecycleUpdate
+  channels: { telegram: boolean; webhook: boolean; discord: boolean }
   telegramToken?: string
   telegramChatId?: string
   webhookUrl?: string
@@ -75,6 +78,21 @@ function buildDiscordEmbed(s: Signal) {
   }
 }
 
+function buildLifecycleTelegramMessage(u: LifecycleUpdate): string {
+  const icons: Record<string, string> = { TP1: "🎯", TP2: "🏆", SL: "🛑", EXPIRED: "⏰", CLOSED: "📋" }
+  const icon = icons[u.state] ?? "📊"
+  const pnl = u.pnl_r != null ? ` · ${u.pnl_r > 0 ? "+" : ""}${u.pnl_r.toFixed(2)}R` : ""
+  return [
+    `${icon} <b>TradeAI Pro — Signal Update</b>`,
+    ``,
+    `<b>${u.sym}</b> · ${u.side === "BUY" ? "🟢 BUY" : "🔴 SELL"}`,
+    `Status: <b>${u.state}</b>${pnl}`,
+    `Entry: <code>${fmt(u.entry, u.digits)}</code>`,
+    ``,
+    `<code>TradeAI Pro · ${new Date().toUTCString()}</code>`,
+  ].join("\n")
+}
+
 function buildWebhookPayload(s: Signal) {
   return {
     event: "signal",
@@ -95,21 +113,18 @@ function buildWebhookPayload(s: Signal) {
 
 export async function POST(req: NextRequest) {
   const body: NotifyRequest = await req.json()
-  const { signal, channels, telegramToken, telegramChatId, webhookUrl, discordWebhookUrl } = body
+  const { type = "signal", signal, lifecycle, channels, telegramToken, telegramChatId, webhookUrl, discordWebhookUrl } = body
+  const isLifecycle = type === "lifecycle" && !!lifecycle
 
   const results: Record<string, string> = {}
 
   if (channels.telegram && telegramToken && telegramChatId) {
+    const text = isLifecycle ? buildLifecycleTelegramMessage(lifecycle!) : buildTelegramMessage(signal!)
     try {
       const res = await fetch(`https://api.telegram.org/bot${telegramToken}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: telegramChatId,
-          text: buildTelegramMessage(signal),
-          parse_mode: "HTML",
-          disable_web_page_preview: true,
-        }),
+        body: JSON.stringify({ chat_id: telegramChatId, text, parse_mode: "HTML", disable_web_page_preview: true }),
       })
       results.telegram = res.ok ? "ok" : `error ${res.status}`
     } catch (e) {
@@ -117,7 +132,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  if (channels.webhook && webhookUrl) {
+  if (!isLifecycle && channels.webhook && webhookUrl && signal) {
     try {
       const res = await fetch(webhookUrl, {
         method: "POST",
@@ -130,7 +145,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  if (channels.discord && discordWebhookUrl) {
+  if (!isLifecycle && channels.discord && discordWebhookUrl && signal) {
     try {
       const res = await fetch(discordWebhookUrl, {
         method: "POST",

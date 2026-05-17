@@ -1,17 +1,20 @@
 "use client"
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import type { Pair, HistoryEntry } from "@/app/lib/types"
 import { fmt } from "@/app/lib/market-data"
+import { fetchBars } from "@/app/lib/twelvedata"
+import { setCachedBars } from "@/app/lib/bar-cache"
 
 interface Props { history: HistoryEntry[]; pairs: Pair[] }
 
 const LIFECYCLE: Record<string, { label: string; color: string }> = {
-  ACTIVE: { label: "ACTIVE", color: "#00d4ff" },
-  TP1:    { label: "TP1 ✓", color: "#00ff88" },
-  TP2:    { label: "TP2 ✓", color: "#00ff88" },
-  SL:     { label: "SL ✗",  color: "#ff3d5a" },
-  CLOSED: { label: "CLOSED",color: "#a78bfa" },
-  CANCELLED: { label: "VOID", color: "#5a6779" },
+  ACTIVE:    { label: "ACTIVE",  color: "#00d4ff" },
+  TP1:       { label: "TP1 ✓",  color: "#00ff88" },
+  TP2:       { label: "TP2 ✓",  color: "#00ff88" },
+  SL:        { label: "SL ✗",   color: "#ff3d5a" },
+  CLOSED:    { label: "CLOSED", color: "#a78bfa" },
+  CANCELLED: { label: "VOID",   color: "#5a6779" },
+  EXPIRED:   { label: "EXPIRED",color: "#f59e0b" },
 }
 
 function LifecycleBadge({ state }: { state: string }) {
@@ -33,45 +36,60 @@ function KVMini({ label, value, color = "#ffffff" }: { label: string; value: str
 
 type OHLCBar = { open: number; high: number; low: number; close: number; time?: number }
 
-function buildSyntheticBars(signal: HistoryEntry, seed: number): OHLCBar[] {
-  // Seeded PRNG so the bars are deterministic for a given signal
-  let s = seed
-  const rng = () => { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0xffffffff }
-
-  const out: OHLCBar[] = []
-  const vol = Math.abs(signal.entry - signal.sl) * 0.4 || signal.entry * 0.001
-  let prev = signal.entry - vol * 3
-  for (let i = 0; i < 80; i++) {
-    const drift = (rng() - 0.5) * vol
-    const open = i === 0 ? prev : out[i - 1].close
-    const close = open + drift + (i > 40 ? (signal.side === "BUY" ? vol * 0.08 : -vol * 0.08) : 0)
-    const high = Math.max(open, close) + rng() * vol * 0.4
-    const low  = Math.min(open, close) - rng() * vol * 0.4
-    out.push({ open, high, low, close })
-    prev = close
-  }
-  return out
-}
-
-function ReplayChart({ signal, pair }: { signal: HistoryEntry; pair: Pair | undefined }) {
-  const { data, isReal, entryBarIdx } = useMemo(() => {
-    if (pair && pair.history.length >= 10) {
-      const sigTimeSec = Math.floor(signal.time / 1000)
-      const bars = pair.history
-      let closestIdx = bars.length - 1
-      let minDiff = Infinity
-      for (let i = 0; i < bars.length; i++) {
-        const diff = Math.abs(bars[i].time - sigTimeSec)
-        if (diff < minDiff) { minDiff = diff; closestIdx = i }
-      }
-      const before = Math.min(closestIdx, 50)
-      const after  = Math.min(bars.length - 1 - closestIdx, 15)
-      const sliced = bars.slice(closestIdx - before, closestIdx + after + 1)
-      return { data: sliced as OHLCBar[], isReal: true, entryBarIdx: before }
+function ReplayChart({ signal, bars: sourceBars, onLoadBars, loading }: {
+  signal: HistoryEntry
+  bars: OHLCBar[]
+  onLoadBars: () => void
+  loading: boolean
+}) {
+  const { data, entryBarIdx } = useMemo(() => {
+    if (sourceBars.length < 10) return { data: [] as OHLCBar[], entryBarIdx: -1 }
+    const sigTimeSec = Math.floor(signal.time / 1000)
+    let closestIdx = sourceBars.length - 1
+    let minDiff = Infinity
+    for (let i = 0; i < sourceBars.length; i++) {
+      const diff = Math.abs((sourceBars[i]?.time ?? 0) - sigTimeSec)
+      if (diff < minDiff) { minDiff = diff; closestIdx = i }
     }
-    return { data: buildSyntheticBars(signal, signal.time), isReal: false, entryBarIdx: -1 }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pair?.sym, pair?.history.length, signal.time])
+    const before = Math.min(closestIdx, 50)
+    const after  = Math.min(sourceBars.length - 1 - closestIdx, 15)
+    const sliced = sourceBars.slice(closestIdx - before, closestIdx + after + 1)
+    return { data: sliced as OHLCBar[], entryBarIdx: before }
+  }, [sourceBars, signal.time])
+
+  if (!data.length) {
+    return (
+      <div className="flex items-center justify-center h-[260px] rounded-md bg-white/[0.02] border border-white/[0.04]">
+        <div className="text-center space-y-3">
+          <div className="text-mute text-[12px]">Chart data not in memory</div>
+          <button
+            onClick={onLoadBars}
+            disabled={loading}
+            className={`h-8 px-4 rounded-md text-[11px] font-semibold tracking-[0.14em] transition flex items-center gap-2 mx-auto
+              ${loading ? "bg-accent-blue/10 text-accent-blue/50 cursor-not-allowed" : "bg-accent-blue/15 text-accent-blue hover:bg-accent-blue/25"}`}
+          >
+            {loading ? (
+              <>
+                <svg className="animate-spin" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                </svg>
+                Loading…
+              </>
+            ) : (
+              <>
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Load Chart Data
+              </>
+            )}
+          </button>
+          <div className="text-mute text-[10px] opacity-50">Fetches live H1 bars from Twelve Data</div>
+        </div>
+      </div>
+    )
+  }
 
   const W = 900, H = 230, pad = 8
   const allPrices = data.flatMap(d => [d.high, d.low])
@@ -84,29 +102,24 @@ function ReplayChart({ signal, pair }: { signal: HistoryEntry; pair: Pair | unde
 
   return (
     <div className="relative">
-      {/* Real/Simulated badge */}
-      <div className={`absolute top-2 left-2 z-10 px-2 h-5 rounded flex items-center gap-1 text-[9px] font-bold tracking-[0.14em]
-        ${isReal ? "bg-accent-green/15 text-accent-green" : "bg-white/[0.06] text-mute"}`}>
-        <span className={`w-1.5 h-1.5 rounded-full ${isReal ? "bg-accent-green" : "bg-mute"}`}/>
-        {isReal ? "LIVE DATA" : "SIMULATED"}
+      <div className="absolute top-2 left-2 z-10 px-2 h-5 rounded flex items-center gap-1 text-[9px] font-bold tracking-[0.14em] bg-accent-green/15 text-accent-green">
+        <span className="w-1.5 h-1.5 rounded-full bg-accent-green"/>
+        LIVE DATA
       </div>
 
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[260px] block rounded-md overflow-hidden">
         <rect width={W} height={H} fill="rgba(10,14,26,0.7)" />
 
-        {/* Entry vertical marker */}
         {entryX > 0 && (
           <line x1={entryX} x2={entryX} y1={pad} y2={H - pad}
             stroke="rgba(0,212,255,0.18)" strokeWidth="1" strokeDasharray="3 3" />
         )}
 
-        {/* Level lines */}
         <line x1={pad} x2={W - pad} y1={yv(signal.entry)} y2={yv(signal.entry)} stroke="#00d4ff" strokeWidth="1.5" />
         <line x1={pad} x2={W - pad} y1={yv(signal.sl)}    y2={yv(signal.sl)}    stroke="#ff3d5a" strokeWidth="1" strokeDasharray="5 4" />
         <line x1={pad} x2={W - pad} y1={yv(signal.tp1)}   y2={yv(signal.tp1)}   stroke="#00ff88" strokeWidth="1" strokeDasharray="5 4" />
         <line x1={pad} x2={W - pad} y1={yv(signal.tp2)}   y2={yv(signal.tp2)}   stroke="#00ff88" strokeWidth="1.4" strokeDasharray="5 4" />
 
-        {/* Candles */}
         {data.map((b, i) => {
           const x = pad + i * cw
           const up = b.close >= b.open
@@ -125,8 +138,7 @@ function ReplayChart({ signal, pair }: { signal: HistoryEntry; pair: Pair | unde
           )
         })}
 
-        {/* Time labels — show every ~10 bars */}
-        {isReal && data.map((b, i) => {
+        {data.map((b, i) => {
           if (!b.time || i % Math.max(1, Math.floor(data.length / 8)) !== 0) return null
           const x = pad + i * cw + cw / 2
           const label = new Date(b.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -136,7 +148,6 @@ function ReplayChart({ signal, pair }: { signal: HistoryEntry; pair: Pair | unde
           )
         })}
 
-        {/* Level labels */}
         {[
           { v: signal.entry, label: `ENTRY ${fmt(signal.entry, signal.digits)}`, col: "#00d4ff" },
           { v: signal.sl,    label: `SL ${fmt(signal.sl, signal.digits)}`,       col: "#ff3d5a" },
@@ -159,6 +170,21 @@ export default function ReplayView({ history, pairs }: Props) {
   const [idx, setIdx] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(600)
+  const [loadedBars, setLoadedBars] = useState<Record<string, OHLCBar[]>>({})
+  const [fetchingSym, setFetchingSym] = useState<string | null>(null)
+
+  const loadBarsForSym = useCallback(async (sym: string) => {
+    if (fetchingSym === sym) return
+    setFetchingSym(sym)
+    try {
+      const bars = await fetchBars(sym, "H1", 220)
+      if (bars.length) {
+        setLoadedBars(prev => ({ ...prev, [sym]: bars as OHLCBar[] }))
+        setCachedBars(sym, bars)
+      }
+    } catch { /* non-critical */ }
+    setFetchingSym(null)
+  }, [fetchingSym])
 
   useEffect(() => {
     if (!playing) return
@@ -188,7 +214,6 @@ export default function ReplayView({ history, pairs }: Props) {
 
   return (
     <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
-      {/* Header */}
       <div className="flex items-end justify-between px-6 pt-5 pb-4 border-b hairline shrink-0">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-md bg-accent-blue/10 text-accent-blue flex items-center justify-center">
@@ -198,7 +223,7 @@ export default function ReplayView({ history, pairs }: Props) {
           </div>
           <div>
             <div className="text-[18px] font-semibold text-white tracking-tight">Signal Replay</div>
-            <div className="text-[11px] text-mute mt-0.5">Step through {total} historical signals</div>
+            <div className="text-[11px] text-mute mt-0.5">Step through {total} historical signals — real market data only</div>
           </div>
         </div>
         <div className="flex items-center gap-2 text-[10.5px] text-mute">
@@ -215,7 +240,6 @@ export default function ReplayView({ history, pairs }: Props) {
 
       <div className="flex-1 overflow-y-auto p-6 min-h-0">
         <div className="panel rounded-xl p-5">
-          {/* Signal meta */}
           <div className="flex items-start justify-between mb-4">
             <div>
               <div className="text-[10px] tracking-[0.18em] uppercase text-mute">
@@ -233,7 +257,6 @@ export default function ReplayView({ history, pairs }: Props) {
             <LifecycleBadge state={s.state} />
           </div>
 
-          {/* Level KVs */}
           <div className="grid grid-cols-5 gap-2 mb-5">
             <KVMini label="Entry" value={fmt(s.entry, s.digits)} color="#00d4ff" />
             <KVMini label="SL"    value={fmt(s.sl,    s.digits)} color="#ff3d5a" />
@@ -244,16 +267,22 @@ export default function ReplayView({ history, pairs }: Props) {
               color={pnlColor} />
           </div>
 
-          {/* Chart */}
-          <ReplayChart signal={s} pair={pairs.find(p => p.sym === s.sym)} />
+          <ReplayChart
+            signal={s}
+            bars={((): OHLCBar[] => {
+              const pair = pairs.find(p => p.sym === s.sym)
+              if (pair && pair.history.length >= 10) return pair.history as OHLCBar[]
+              return (loadedBars[s.sym] ?? []) as OHLCBar[]
+            })()}
+            onLoadBars={() => loadBarsForSym(s.sym)}
+            loading={fetchingSym === s.sym}
+          />
 
-          {/* AI reasoning */}
           <div className="mt-4 px-3 py-2.5 rounded-md bg-white/[0.02] border border-white/[0.05]">
             <div className="text-[9px] tracking-[0.18em] uppercase text-mute mb-1">AI Reasoning</div>
             <div className="text-[11.5px] text-white/80 leading-relaxed">{s.why}</div>
           </div>
 
-          {/* Playback controls */}
           <div className="mt-5 flex items-center gap-3">
             <button
               onClick={() => { setIdx(0); setPlaying(false) }}
