@@ -54,17 +54,17 @@ export function useSignalLifecycle({ pairs, history, setHistory, setPairs, onRes
 
       // ── TP / SL checks ────────────────────────────────────────
       const tp1R = Math.abs(sig.side === "BUY" ? sig.tp1 - sig.entry : sig.entry - sig.tp1) / slDist
-      const tp2R = Math.max(parseFloat(sig.rr) || 2.0, 0.5)
+      const tp2R = Math.abs(sig.side === "BUY" ? sig.tp2 - sig.entry : sig.entry - sig.tp2) / slDist
 
       if (sig.side === "BUY") {
-        if (price <= sig.sl && already !== "SL")
+        if (price <= sig.sl && already !== "SL" && already !== "TP1")
           updates.push({ key, newState: "SL",  pnl_r: -1.0,  sym: sig.sym, time: sig.time })
         else if (price >= sig.tp2 && already !== "TP2" && already !== "SL")
           updates.push({ key, newState: "TP2", pnl_r: tp2R,  sym: sig.sym, time: sig.time })
         else if (price >= sig.tp1 && sig.state === "ACTIVE" && !already)
           updates.push({ key, newState: "TP1", pnl_r: tp1R,  sym: sig.sym, time: sig.time })
       } else {
-        if (price >= sig.sl && already !== "SL")
+        if (price >= sig.sl && already !== "SL" && already !== "TP1")
           updates.push({ key, newState: "SL",  pnl_r: -1.0,  sym: sig.sym, time: sig.time })
         else if (price <= sig.tp2 && already !== "TP2" && already !== "SL")
           updates.push({ key, newState: "TP2", pnl_r: tp2R,  sym: sig.sym, time: sig.time })

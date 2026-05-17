@@ -291,7 +291,7 @@ function AlignmentCard({ d1Smc, h4Smc, h1Smc }: {
   if (!h1Smc) return null
 
   const biases = [
-    { tf: "D1", bias: d1Smc?.daily?.d1Bias === "UP" ? "BULLISH" : d1Smc?.daily?.d1Bias === "DOWN" ? "BEARISH" : h1Smc.daily?.d1Bias === "UP" ? "BULLISH" : "RANGING" },
+    { tf: "D1", bias: d1Smc?.structure.bias ?? (h1Smc.daily?.d1Bias === "UP" ? "BULLISH" : h1Smc.daily?.d1Bias === "DOWN" ? "BEARISH" : "RANGING") },
     { tf: "H4", bias: h4Smc?.structure.bias ?? "RANGING" },
     { tf: "H1", bias: h1Smc.structure.bias },
   ]
@@ -369,6 +369,13 @@ export default function MTFView({ pairs, selectedId, onSelectPair }: Props) {
     [activePair?.h4History, activePair?.px]
   )
 
+  const d1Smc = useMemo(() =>
+    activePair?.d1History && activePair.d1History.length >= 5
+      ? buildSMCContext(activePair.d1History, activePair.px)
+      : null,
+    [activePair?.d1History, activePair?.px]
+  )
+
   if (!activePair) return null
   const digits = activePair.digits
 
@@ -405,7 +412,7 @@ export default function MTFView({ pairs, selectedId, onSelectPair }: Props) {
         <div className="space-y-4">
           {/* 3 TF cards side by side */}
           <div className="flex gap-4 min-w-0">
-            <TFCard label="D1"  color="#ffb800" smc={h1Smc} px={activePair.px} digits={digits} hasBars={activePair.history.length >= 20} />
+            <TFCard label="D1"  color="#ffb800" smc={d1Smc} px={activePair.px} digits={digits} hasBars={(activePair.d1History?.length ?? 0) >= 5} />
             <TFCard label="H4"  color="#00d4ff" smc={h4Smc} px={activePair.px} digits={digits} hasBars={(activePair.h4History?.length ?? 0) >= 20} />
             <TFCard label="H1"  color="#00ff88" smc={h1Smc} px={activePair.px} digits={digits} hasBars={activePair.history.length >= 20} />
           </div>
@@ -413,7 +420,7 @@ export default function MTFView({ pairs, selectedId, onSelectPair }: Props) {
           {/* Bottom row: alignment + price ladder */}
           <div className="flex gap-4">
             <div className="flex-1">
-              <AlignmentCard d1Smc={h1Smc} h4Smc={h4Smc} h1Smc={h1Smc} />
+              <AlignmentCard d1Smc={d1Smc} h4Smc={h4Smc} h1Smc={h1Smc} />
             </div>
             <div className="w-[280px]">
               <PriceLadder h1Smc={h1Smc} h4Smc={h4Smc} px={activePair.px} digits={digits} />

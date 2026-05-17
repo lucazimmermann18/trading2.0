@@ -252,23 +252,28 @@ export default function IntermarketView() {
 
   // Fetch DXY bars
   useEffect(() => {
+    let cancelled = false
     setLoadingDxy(true)
     fetchBars("DXY", tf, 200)
-      .then(bars => { setDxyBars(bars); setLoadingDxy(false) })
-      .catch(() => setLoadingDxy(false))
+      .then(bars => { if (!cancelled) { setDxyBars(bars); setLoadingDxy(false) } })
+      .catch(() => { if (!cancelled) setLoadingDxy(false) })
+    return () => { cancelled = true }
   }, [tf])
 
   // Fetch correlated asset bars
   useEffect(() => {
+    let cancelled = false
     setLoadingAssets(true)
     Promise.all(
       CORR_ASSETS.map(a => fetchBars(a.sym, tf, 200).then(bars => ({ sym: a.sym, bars })).catch(() => ({ sym: a.sym, bars: [] as OHLCBar[] })))
     ).then(results => {
+      if (cancelled) return
       const map: Record<string, OHLCBar[]> = {}
       results.forEach(r => { map[r.sym] = r.bars })
       setAssetBars(map)
       setLoadingAssets(false)
     })
+    return () => { cancelled = true }
   }, [tf])
 
   // Init lightweight-charts for DXY
@@ -412,7 +417,7 @@ export default function IntermarketView() {
       </div>
 
       {/* DXY Chart */}
-      <div className="panel rounded-xl overflow-hidden shrink-0" style={{ height: 280 }}>
+      <div className="panel rounded-xl overflow-hidden shrink-0 relative" style={{ height: 280 }}>
         <div className="px-3 pt-2 pb-0 flex items-center gap-2 border-b border-white/[0.04]">
           <div className="text-[10px] tracking-widest uppercase text-mute pb-2">DXY Chart · {tf}</div>
         </div>

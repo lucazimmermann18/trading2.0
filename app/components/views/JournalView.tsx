@@ -62,7 +62,7 @@ export default function JournalView({ history, onOpen, onUpdateNote }: Props) {
         if (filter === "wins"    && !((s.pnl_r ?? 0) > 0)) return false
         if (filter === "losses"  && !((s.pnl_r ?? 0) < 0)) return false
         if (q && !s.sym.toLowerCase().includes(q.toLowerCase()) &&
-            !s.skillset.toLowerCase().includes(q.toLowerCase())) return false
+            !(s.skillset ?? "").toLowerCase().includes(q.toLowerCase())) return false
         return true
       })
       .sort((a, b) => {

@@ -168,7 +168,7 @@ export function detectOrderBlocks(bars: OHLCBar[], px: number): OrderBlock[] {
 
     // Bullish OB: strong bullish displacement bar preceded by bearish bar
     if (cur.close > cur.open && body > avgBody * 1.4 && prev.close < prev.open) {
-      // Mitigation check: any subsequent bar that trades into the OB zone
+      // Mitigation: close-based — price must close inside the OB zone (not just wick)
       const ob: OrderBlock = {
         type: "bull",
         high: prev.high,
@@ -177,7 +177,7 @@ export function detectOrderBlocks(bars: OHLCBar[], px: number): OrderBlock[] {
         time: prev.time,
         strength: body > avgBody * 2.5 ? 3 : body > avgBody * 2.0 ? 2 : 1,
       }
-      const mitigated = slice.slice(i + 1).some(b => b.low <= ob.high && b.high >= ob.low)
+      const mitigated = slice.slice(i + 1).some(b => b.close <= ob.high && b.high >= ob.low)
       if (!mitigated) results.push(ob)
     }
 
@@ -191,7 +191,7 @@ export function detectOrderBlocks(bars: OHLCBar[], px: number): OrderBlock[] {
         time: prev.time,
         strength: body > avgBody * 2.5 ? 3 : body > avgBody * 2.0 ? 2 : 1,
       }
-      const mitigated = slice.slice(i + 1).some(b => b.low <= ob.high && b.high >= ob.low)
+      const mitigated = slice.slice(i + 1).some(b => b.close >= ob.low && b.low <= ob.high)
       if (!mitigated) results.push(ob)
     }
   }
@@ -295,7 +295,7 @@ export function detectLiquidity(bars: OHLCBar[], px: number): LiquidityLevel[] {
 
 function aggregateToH4(h1Bars: OHLCBar[]): OHLCBar[] {
   const h4: OHLCBar[] = []
-  for (let i = 0; i + 3 < h1Bars.length; i += 4) {
+  for (let i = 0; i < h1Bars.length; i += 4) {
     const c = h1Bars.slice(i, i + 4)
     h4.push({
       time:   c[0].time,
