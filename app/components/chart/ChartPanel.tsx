@@ -573,12 +573,16 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
   useEffect(() => {
     if (!candleRef.current) return
     setLoading(true)
+    let cancelled = false
+
     const load = async () => {
       let loadedBars: OHLCBar[]
       try {
         const fetched = await fetchBars(pair.sym, timeframe, 200)
+        if (cancelled) return
         loadedBars = fetched.length ? fetched : pair.history
       } catch {
+        if (cancelled) return
         loadedBars = pair.history
       }
       setBars(loadedBars)
@@ -614,6 +618,7 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
       setTimeout(() => redrawRef.current(), 100)
     }
     load()
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pair.id, timeframe, !!candleRef.current])
 

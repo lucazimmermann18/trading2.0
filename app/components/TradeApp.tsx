@@ -561,7 +561,6 @@ export default function TradeApp() {
 
       // Normalize old format (data.side) and new format (data.status)
       const status: string = data.status ?? (data.side && data.side !== "NO TRADE" ? "TRADE" : "NO_TRADE")
-      const side = (data.side ?? (status === "TRADE" ? undefined : undefined)) as "BUY" | "SELL" | undefined
 
       if (status === "TRADE" && (data.side === "BUY" || data.side === "SELL") && data.confidence >= threshold) {
         logEvent("signal", `${p.sym} ${data.side} · conf ${data.confidence}% [${triggerLabel}]`)
@@ -637,7 +636,7 @@ export default function TradeApp() {
 
   // Active trade management: move SL to breakeven on TP1, trail to TP1 on halfway to TP2
   useTradeManager({
-    pairs, history, setPairs,
+    pairs, history, setPairs, setHistory,
     onBreakevenMove: useCallback((sym: string, newSL: number) => {
       logEvent("tp", `${sym} · SL moved to ${newSL.toFixed(5)} (breakeven/trail)`)
     }, [logEvent]),

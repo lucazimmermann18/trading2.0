@@ -377,22 +377,21 @@ ${tacticalBlock}
 ${lessonsBlock}
 
 === INSTRUMENT ===
-Symbol:   ${r.sym}
-Price:    ${r.px.toFixed(d)}
-Spread:   ${r.spread} (${spreadPct}% of price)
-Strategy: ${r.skillset}
-Regime:   ${regimeLabel}
+Symbol:    ${r.sym}
+Price:     ${r.px.toFixed(d)}
+Timeframe: ${r.timeframe} (all entry levels must be valid on this timeframe)
+Spread:    ${r.spread} (${spreadPct}% of price)
+Strategy:  ${r.skillset}
+Regime:    ${regimeLabel}
 
 === SESSION & NEWS CONTEXT (factor into confidence) ===
 Session:  ${sessionStr}
 Upcoming: ${newsStr}
 ${d1Block}
 
-=== DAILY CONTEXT ===
-D1 Bias:      ${daily?.d1Bias ?? "N/A"}
-PDH:          ${daily?.pdHigh?.toFixed(d) ?? "N/A"}  PDL: ${daily?.pdLow?.toFixed(d) ?? "N/A"}
-Weekly Range: ${daily?.weekLow?.toFixed(d) ?? "N/A"} – ${daily?.weekHigh?.toFixed(d) ?? "N/A"}
-D1 Order Blocks:
+=== INTRADAY REFERENCE LEVELS ===
+D1 Bias: ${daily?.d1Bias ?? "N/A"} | PDH: ${daily?.pdHigh?.toFixed(d) ?? "N/A"} | PDL: ${daily?.pdLow?.toFixed(d) ?? "N/A"}
+D1 Order Blocks (from SMC):
 ${d1ObLines}
 
 === LIQUIDITY SWEEPS ===
@@ -439,8 +438,13 @@ ${ohlcv}`
 
 function extractResult(text: string): AIResult {
   const match = text.match(/\{[\s\S]*\}/)
-  if (!match) throw new Error("No JSON in response")
-  const obj = JSON.parse(match[0])
+  if (!match) throw new Error("No JSON found in AI response")
+  let obj: Record<string, unknown>
+  try {
+    obj = JSON.parse(match[0])
+  } catch {
+    throw new Error(`AI returned invalid JSON: ${match[0].slice(0, 120)}`)
+  }
 
   // Normalize old format (side: "BUY"/"SELL"/"NO TRADE") to new status format
   if (!obj.status) {
@@ -456,7 +460,7 @@ function extractResult(text: string): AIResult {
   if (!Array.isArray(obj.confluences)) obj.confluences = []
   if (!obj.reasoning && obj.reason) obj.reasoning = obj.reason
 
-  return obj as AIResult
+  return obj as unknown as AIResult
 }
 
 // ── Provider Calls ─────────────────────────────────────────────

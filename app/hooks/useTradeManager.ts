@@ -6,6 +6,7 @@ interface Props {
   pairs: Pair[]
   history: HistoryEntry[]
   setPairs: React.Dispatch<React.SetStateAction<Pair[]>>
+  setHistory: React.Dispatch<React.SetStateAction<HistoryEntry[]>>
   onBreakevenMove?: (sym: string, newSL: number) => void
 }
 
@@ -13,28 +14,30 @@ interface Props {
  * Active trade management:
  * - When TP1 is hit: move SL to breakeven (entry price)
  * - When price reaches halfway to TP2: trail SL to TP1 level
- * Runs on every price update, modifies pair.signal.sl in-place.
+ * Updates BOTH pair.signal.sl AND the history entry sl so the lifecycle hook
+ * respects the moved stop loss.
  */
-export function useTradeManager({ pairs, history, setPairs, onBreakevenMove }: Props) {
+export function useTradeManager({ pairs, history, setPairs, setHistory, onBreakevenMove }: Props) {
   const onMoveRef = useRef(onBreakevenMove)
   onMoveRef.current = onBreakevenMove
 
   useEffect(() => {
     // Find signals that have already hit TP1 (partial)
-    const tp1Entries = new Set(
+    const tp1Entries = new Map(
       history
         .filter(h => h.state === "TP1")
-        .map(h => `${h.sym}:${h.time}`)
+        .map(h => [`${h.sym}:${h.time}`, h])
     )
     if (tp1Entries.size === 0) return
 
-    let changed = false
-    const updates: Array<{ id: number; newSL: number }> = []
+    const pairUpdates: Array<{ id: number; newSL: number }> = []
+    const historyUpdates: Array<{ sym: string; time: number; newSL: number }> = []
 
     for (const p of pairs) {
       if (!p.signal) continue
       const key = `${p.sym}:${p.signal.time}`
-      if (!tp1Entries.has(key)) continue
+      const histEntry = tp1Entries.get(key)
+      if (!histEntry) continue
 
       const { side, entry, sl, tp1, tp2 } = p.signal
       const price = p.px
@@ -53,20 +56,27 @@ export function useTradeManager({ pairs, history, setPairs, onBreakevenMove }: P
         if (price <= trailTrigger) newSL = Math.min(newSL, tp1)
       }
 
-      if (newSL !== sl) {
-        updates.push({ id: p.id, newSL })
-        changed = true
-      }
+      if (Math.abs(newSL - sl) < 1e-8) continue  // no change
+      pairUpdates.push({ id: p.id, newSL })
+      historyUpdates.push({ sym: p.sym, time: p.signal.time, newSL })
     }
 
-    if (!changed) return
+    if (pairUpdates.length === 0) return
 
+    // Update pair signals
     setPairs(prev => prev.map(p => {
-      const upd = updates.find(u => u.id === p.id)
+      const upd = pairUpdates.find(u => u.id === p.id)
       if (!upd || !p.signal) return p
       onMoveRef.current?.(p.sym, upd.newSL)
       return { ...p, signal: { ...p.signal, sl: upd.newSL } }
     }))
+
+    // Sync SL to history so useSignalLifecycle uses the updated stop level
+    setHistory(prev => prev.map(h => {
+      const upd = historyUpdates.find(u => u.sym === h.sym && u.time === h.time)
+      if (!upd) return h
+      return { ...h, sl: upd.newSL }
+    }))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pairs])
+  }, [pairs, history])
 }
