@@ -29,7 +29,7 @@ export function ResolutionToast({ resolved, onDismiss }: ResProps) {
 
   return (
     <div
-      className="fixed top-20 right-5 z-50 w-[320px] panel rounded-xl p-4 animate-slideInRight"
+      className="toast-mobile panel rounded-xl p-4 animate-slideInRight"
       style={{ boxShadow: `0 0 0 1px ${color}55, 0 20px 50px -10px ${color}33` }}
     >
       <div className="flex items-center gap-3">
@@ -91,7 +91,7 @@ export default function Toast({ signal, pair, onDismiss, onView }: Props) {
   const isBuy = signal.side === "BUY"
   return (
     <div
-      className="fixed top-20 right-5 z-40 w-[360px] panel rounded-xl p-4 animate-slideInRight"
+      className="toast-mobile-lg panel rounded-xl p-4 animate-slideInRight"
       style={{
         boxShadow: isBuy
           ? "0 0 0 1px rgba(0,255,136,0.4), 0 24px 60px -10px rgba(0,255,136,0.25)"

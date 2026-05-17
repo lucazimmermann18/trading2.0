@@ -142,33 +142,38 @@ export default function SignalDetailModal({ signal, onClose }: Props) {
   return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-riseIn"
+      className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/70 backdrop-blur-sm animate-riseIn"
       onClick={e => { if (e.target === overlayRef.current) onClose() }}
     >
-      <div className="w-[820px] max-h-[88vh] panel rounded-xl flex flex-col overflow-hidden shadow-2xl">
+      <div className="w-full max-h-[92dvh] md:w-[820px] md:max-h-[88vh] panel rounded-t-2xl md:rounded-xl flex flex-col overflow-hidden shadow-2xl">
+        {/* Mobile drag handle */}
+        <div className="md:hidden flex justify-center pt-3 pb-1 shrink-0">
+          <div className="w-10 h-1 rounded-full bg-white/20" />
+        </div>
+
         {/* Header */}
-        <div className="h-13 px-5 flex items-center justify-between border-b hairline shrink-0"
+        <div className="h-12 md:h-13 px-4 md:px-5 flex items-center justify-between border-b hairline shrink-0"
           style={{ borderBottomColor: sideColor + "30" }}>
-          <div className="flex items-center gap-3">
-            <div className="text-[18px] font-semibold text-white tracking-tight">{signal.sym}</div>
-            <div className={`flex items-center gap-1.5 px-2.5 h-6 rounded-[5px] text-[10px] font-bold tracking-[0.2em]
+          <div className="flex items-center gap-2 md:gap-3 min-w-0">
+            <div className="text-[16px] md:text-[18px] font-semibold text-white tracking-tight">{signal.sym}</div>
+            <div className={`flex items-center gap-1 md:gap-1.5 px-2 md:px-2.5 h-6 rounded-[5px] text-[10px] font-bold tracking-[0.2em] shrink-0
               ${signal.side === "BUY" ? "bg-accent-green/20 text-accent-green" : "bg-accent-red/20 text-accent-red"}`}>
               {signal.side === "BUY" ? "▲" : "▼"} {signal.side}
             </div>
-            <div className="px-2 h-5 inline-flex items-center rounded-[3px] text-[9.5px] font-bold tracking-[0.14em]"
+            <div className="px-2 h-5 inline-flex items-center rounded-[3px] text-[9.5px] font-bold tracking-[0.14em] shrink-0"
               style={{ background: cfg.color + "1f", color: cfg.color }}>
               {cfg.label}
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="text-[10.5px] text-mute num">
+          <div className="flex items-center gap-2 md:gap-3 shrink-0">
+            <div className="hidden md:block text-[10.5px] text-mute num">
               {new Date(signal.time).toLocaleString(undefined, {
                 month: "short", day: "2-digit",
                 hour: "2-digit", minute: "2-digit",
               })}
             </div>
             <button onClick={onClose}
-              className="w-7 h-7 rounded-md flex items-center justify-center text-mute hover:text-white hover:bg-white/[0.06] transition">
+              className="w-8 h-8 md:w-7 md:h-7 rounded-md flex items-center justify-center text-mute hover:text-white hover:bg-white/[0.06] transition">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
                 <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
               </svg>
@@ -178,41 +183,36 @@ export default function SignalDetailModal({ signal, onClose }: Props) {
 
         <div className="flex-1 overflow-y-auto min-h-0">
           {/* Top section: levels + confidence */}
-          <div className="px-5 pt-5 pb-4 border-b hairline">
-            <div className="flex items-start gap-5">
-              {/* Confidence arc */}
-              <div className="flex flex-col items-center gap-1 shrink-0">
-                <ConfidenceArc value={signal.confidence} />
-                <div className="text-[9px] text-mute tracking-[0.12em]">{signal.skillset}</div>
+          <div className="px-4 md:px-5 pt-4 md:pt-5 pb-4 border-b hairline">
+            {/* Level cards — 2x2 grid on mobile, row on desktop */}
+            <div className="grid grid-cols-2 gap-2 md:flex md:gap-2 mb-3">
+              <LevelCard label="Entry"     value={fmt(signal.entry, signal.digits)} color="#00d4ff" />
+              <LevelCard label="Stop Loss" value={fmt(signal.sl,    signal.digits)} color="#ff3d5a" />
+              <LevelCard label="TP1"       value={fmt(signal.tp1,   signal.digits)} color="#00ff88" />
+              <LevelCard label="TP2"       value={fmt(signal.tp2,   signal.digits)} color="#00ff88" />
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="flex-1">
+                <RRBar rr={signal.rr} />
               </div>
-
-              {/* Level cards */}
-              <div className="flex-1 space-y-3">
-                <div className="flex gap-2">
-                  <LevelCard label="Entry"    value={fmt(signal.entry, signal.digits)} color="#00d4ff" />
-                  <LevelCard label="Stop Loss" value={fmt(signal.sl,    signal.digits)} color="#ff3d5a" />
-                  <LevelCard label="TP1"       value={fmt(signal.tp1,   signal.digits)} color="#00ff88" />
-                  <LevelCard label="TP2"       value={fmt(signal.tp2,   signal.digits)} color="#00ff88" />
+              <div className="shrink-0 text-right">
+                <div className="text-[9.5px] tracking-[0.16em] uppercase text-mute mb-1">P&amp;L</div>
+                <div className="num text-[18px] md:text-[20px] font-semibold leading-none" style={{ color: pnlColor }}>
+                  {pnl == null ? "Open" : `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}R`}
                 </div>
-                <div className="flex gap-4">
-                  <RRBar rr={signal.rr} />
-                  <div className="shrink-0 w-[120px]">
-                    <div className="text-[9.5px] tracking-[0.16em] uppercase text-mute mb-1.5">P &amp; L</div>
-                    <div className="num text-[20px] font-semibold leading-none" style={{ color: pnlColor }}>
-                      {pnl == null ? "Open" : `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}R`}
-                    </div>
-                  </div>
-                  <div className="shrink-0 w-[80px]">
-                    <div className="text-[9.5px] tracking-[0.16em] uppercase text-mute mb-1.5">Timeframe</div>
-                    <div className="num text-[20px] font-semibold text-white">{signal.tf}</div>
-                  </div>
-                </div>
+              </div>
+              <div className="shrink-0 text-right">
+                <div className="text-[9.5px] tracking-[0.16em] uppercase text-mute mb-1">TF</div>
+                <div className="num text-[18px] md:text-[20px] font-semibold text-white">{signal.tf}</div>
+              </div>
+              <div className="hidden md:flex flex-col items-center gap-1 shrink-0">
+                <ConfidenceArc value={signal.confidence} />
               </div>
             </div>
           </div>
 
           {/* AI Reasoning */}
-          <div className="px-5 py-4 border-b hairline">
+          <div className="px-4 md:px-5 py-4 border-b hairline">
             <div className="text-[9.5px] tracking-[0.18em] uppercase text-mute mb-2 flex items-center gap-2">
               <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <path d="M12 2a2 2 0 0 1 2 2v2a2 2 0 0 1-4 0V4a2 2 0 0 1 2-2z"/>
@@ -229,7 +229,7 @@ export default function SignalDetailModal({ signal, onClose }: Props) {
 
           {/* Confluence breakdown */}
           {signal.confluences && signal.confluences.length > 0 && (
-            <div className="px-5 py-4 border-b hairline">
+            <div className="px-4 md:px-5 py-4 border-b hairline">
               <div className="flex items-center justify-between mb-3">
                 <div className="text-[9.5px] tracking-[0.18em] uppercase text-mute">Confluence Breakdown</div>
                 <div className="flex items-center gap-2">
@@ -248,19 +248,19 @@ export default function SignalDetailModal({ signal, onClose }: Props) {
                   })()}
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-x-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 md:gap-x-6">
                 {signal.confluences.map((c, i) => <ConfluenceRow key={i} c={c} />)}
               </div>
             </div>
           )}
 
           {/* Lifecycle timeline */}
-          <div className="px-5 py-4 border-b hairline">
+          <div className="px-4 md:px-5 py-4 border-b hairline">
             <Timeline state={signal.state} />
           </div>
 
           {/* Notes */}
-          <div className="px-5 py-4">
+          <div className="px-4 md:px-5 py-4">
             <div className="text-[9.5px] tracking-[0.18em] uppercase text-mute mb-2">Notes</div>
             <textarea
               defaultValue={signal.notes ?? ""}
@@ -272,8 +272,8 @@ export default function SignalDetailModal({ signal, onClose }: Props) {
         </div>
 
         {/* Footer */}
-        <div className="h-12 px-5 flex items-center justify-between border-t hairline shrink-0">
-          <div className="flex items-center gap-3 text-[10.5px] text-mute">
+        <div className="px-4 md:px-5 flex items-center justify-between border-t hairline shrink-0" style={{ paddingTop: '0.625rem', paddingBottom: 'calc(0.625rem + env(safe-area-inset-bottom))' }}>
+          <div className="hidden md:flex items-center gap-3 text-[10.5px] text-mute">
             <span>Strategy: <span className="text-white">{signal.skillset}</span></span>
             <span className="text-white/20">·</span>
             <span>TF: <span className="num text-white">{signal.tf}</span></span>
@@ -281,7 +281,7 @@ export default function SignalDetailModal({ signal, onClose }: Props) {
             <span>Confidence: <span className="num" style={{ color: signal.confidence >= 70 ? "#00ff88" : "#ffb800" }}>{signal.confidence}%</span></span>
           </div>
           <button onClick={onClose}
-            className="h-8 px-4 rounded-md bg-accent-blue text-ink-950 text-[12px] font-semibold hover:bg-accent-blue/90 transition">
+            className="w-full md:w-auto h-10 md:h-8 px-4 rounded-md bg-accent-blue text-ink-950 text-[12px] font-semibold hover:bg-accent-blue/90 transition">
             Close
           </button>
         </div>

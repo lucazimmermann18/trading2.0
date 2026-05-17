@@ -78,6 +78,43 @@ button { touch-action: manipulation; }
   }
 }
 
+/* ===== Safe-area helpers ===== */
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+
+/* Toast: bottom of screen on mobile, top-right on desktop */
+.toast-mobile {
+  position: fixed;
+  bottom: calc(3.75rem + env(safe-area-inset-bottom));
+  left: 1rem;
+  right: 1rem;
+  z-index: 50;
+}
+@media (min-width: 768px) {
+  .toast-mobile {
+    bottom: auto;
+    top: 5rem;
+    left: auto;
+    right: 1.25rem;
+    width: 320px;
+  }
+}
+.toast-mobile-lg {
+  position: fixed;
+  bottom: calc(3.75rem + env(safe-area-inset-bottom));
+  left: 1rem;
+  right: 1rem;
+  z-index: 40;
+}
+@media (min-width: 768px) {
+  .toast-mobile-lg {
+    bottom: auto;
+    top: 5rem;
+    left: auto;
+    right: 1.25rem;
+    width: 360px;
+  }
+}
+
 @layer utilities {
   .text-mute { color: #5a6779; }
   .bg-mute   { background-color: #5a6779; }

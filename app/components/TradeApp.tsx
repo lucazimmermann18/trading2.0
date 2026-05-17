@@ -771,8 +771,10 @@ export default function TradeApp() {
         wsConnected={wsConnected}
       />
 
-      {/* Economic calendar strip */}
-      <CalendarStrip upcoming={calendarUpcoming} minutesUntil={minutesUntil} />
+      {/* Economic calendar strip — desktop only (saves screen space on mobile) */}
+      <div className="hidden md:block shrink-0">
+        <CalendarStrip upcoming={calendarUpcoming} minutesUntil={minutesUntil} />
+      </div>
 
       {/* WS status banner */}
       {wsBanner && (
@@ -896,7 +898,8 @@ export default function TradeApp() {
       </div>
 
       {/* Mobile bottom navigation bar */}
-      <div className="md:hidden flex items-stretch border-t border-white/[0.08] bg-ink-950 shrink-0">
+      <div className="md:hidden flex items-stretch border-t border-white/[0.08] bg-ink-950 shrink-0"
+           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
         {([
           {
             id: "pairs" as const,
@@ -938,7 +941,7 @@ export default function TradeApp() {
                 if (tab.id === "ai") setView("dashboard")
                 setMobilePanelView(tab.id)
               }}
-              className={`flex-1 flex flex-col items-center justify-center gap-1 py-2 transition relative
+              className={`flex-1 flex flex-col items-center justify-center gap-1 py-3 transition relative
                 ${active ? "text-accent-blue" : "text-mute"}`}
             >
               {active && <span className="absolute top-0 left-4 right-4 h-[2px] rounded-full bg-accent-blue" />}
@@ -958,7 +961,7 @@ export default function TradeApp() {
         {/* More button */}
         <button
           onClick={() => setMobileMoreOpen(o => !o)}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 py-2 transition relative
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-3 transition relative
             ${mobileMoreOpen ? "text-accent-blue" : "text-mute"}`}
         >
           {mobileMoreOpen && <span className="absolute top-0 left-4 right-4 h-[2px] rounded-full bg-accent-blue" />}
@@ -973,7 +976,7 @@ export default function TradeApp() {
       {/* Mobile "More" views sheet */}
       {mobileMoreOpen && (
         <div className="md:hidden fixed inset-0 z-40 flex flex-col justify-end" onClick={() => setMobileMoreOpen(false)}>
-          <div className="bg-ink-900 border-t border-white/[0.08] rounded-t-2xl p-4 pb-8" onClick={e => e.stopPropagation()}>
+          <div className="bg-ink-900 border-t border-white/[0.08] rounded-t-2xl p-4" style={{ paddingBottom: 'calc(1.5rem + env(safe-area-inset-bottom))' }} onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-4" />
             <div className="text-[10px] tracking-[0.18em] uppercase text-mute mb-3">Views</div>
             <div className="grid grid-cols-3 gap-2">
