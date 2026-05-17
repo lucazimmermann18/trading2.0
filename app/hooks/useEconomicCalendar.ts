@@ -1,5 +1,5 @@
 "use client"
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import type { EconomicEvent } from "@/app/lib/types"
 
 const CACHE_KEY = "tradeai_calendar_v1"
@@ -55,10 +55,12 @@ export function useEconomicCalendar() {
   }, [events])
 
   /** Events in the next 4 hours */
-  const upcoming = events.filter(e => {
-    const ms = eventTimestamp(e)
-    return ms > Date.now() && ms - Date.now() < 4 * 3_600_000
-  })
+  const upcoming = useMemo(() =>
+    events.filter(e => {
+      const ms = eventTimestamp(e)
+      return ms > Date.now() && ms - Date.now() < 4 * 3_600_000
+    }),
+  [events])
 
   /** Minutes until an event (negative = passed) */
   const minutesUntil = (e: EconomicEvent) =>

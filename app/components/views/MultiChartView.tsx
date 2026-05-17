@@ -27,6 +27,7 @@ function buildPath(history: Pair["history"]): string {
 /* ---- Signal level lines in SVG coordinates ---- */
 function levelY(value: number, history: Pair["history"]): number {
   const h = history.slice(-80)
+  if (h.length === 0) return 55  // centre of chart as fallback
   const min = Math.min(...h.map(b => b.low))
   const max = Math.max(...h.map(b => b.high))
   return 6 + (1 - (value - min) / (max - min || 1)) * (110 - 12)
