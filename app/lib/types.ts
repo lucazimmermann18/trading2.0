@@ -81,7 +81,7 @@ export interface Session {
   active: boolean
 }
 
-export type ViewId = "dashboard" | "multichart" | "heatmap" | "performance" | "journal" | "replay" | "system" | "mtf"
+export type ViewId = "dashboard" | "multichart" | "heatmap" | "performance" | "journal" | "replay" | "system" | "mtf" | "intermarket"
 export type Timeframe = "M1" | "M5" | "M15" | "H1" | "H4" | "D1"
 
 export type AuditKind = "scan" | "signal" | "zone" | "tp" | "sl" | "config" | "ai" | "feed"

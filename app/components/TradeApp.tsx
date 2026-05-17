@@ -15,6 +15,7 @@ import JournalView from "./views/JournalView"
 import ReplayView from "./views/ReplayView"
 import SystemView from "./views/SystemView"
 import MTFView from "./views/MTFView"
+import IntermarketView from "./views/IntermarketView"
 import CalendarStrip from "./CalendarStrip"
 import type { Pair, HistoryEntry, ViewId, Timeframe, AuditEntry, AuditKind, SystemMetrics } from "@/app/lib/types"
 import {
@@ -734,6 +735,7 @@ export default function TradeApp() {
             setHistory(prev => prev.map(h => h.sym === sym && h.time === time ? { ...h, notes } : h))
           }} />}
         {view === "mtf"          && <MTFView pairs={pairs} selectedId={selectedId} onSelectPair={handleOpenPair} />}
+        {view === "intermarket"  && <IntermarketView />}
         {view === "replay"       && <ReplayView history={history} pairs={pairs} />}
         {view === "system" && (
           <SystemView
