@@ -266,7 +266,7 @@ export default function TradeApp() {
           const { macdLine } = calcMACD(closes)
           setPairs(prev => prev.map(pair =>
             pair.id !== p.id ? pair
-              : { ...pair, history: bars, h4History: h4Bars ?? pair.h4History, rsi, macd: macdLine, px: bars[bars.length - 1].close }
+              : { ...pair, history: bars, rsi, macd: macdLine, px: bars[bars.length - 1].close }
           ))
           const label = fromCache ? "cached (market closed)" : p.history.length < 50 ? "loaded" : "refreshed"
           logEvent("feed", `${p.sym} · ${bars.length} H1${h4Bars ? ` + ${h4Bars.length} H4` : ""} bars ${label}`)
@@ -285,6 +285,10 @@ export default function TradeApp() {
   // Keep a ref so the interval can read it without re-subscribing
   const warmupDoneRef = useRef(warmupDone)
   warmupDoneRef.current = warmupDone
+
+  // Ref for zone interval so it doesn't recreate on every pairs change
+  const pairsRefForZones = useRef(pairs)
+  pairsRefForZones.current = pairs
 
   // Apply persisted state once localStorage is loaded
   useEffect(() => {
@@ -534,15 +538,22 @@ export default function TradeApp() {
 
   // ── Zone system ──────────────────────────────────────────────
 
-  // Recompute zones whenever pairs update, then every 5 min
+  // Recompute zones whenever pairs update
   useEffect(() => {
     if (pairs.length === 0) return
-    const recompute = () =>
-      setZones(pairs.filter(p => p.active).flatMap(p => computeZones(p)))
-    recompute()
-    const i = setInterval(recompute, ZONE_RECOMPUTE_MS)
-    return () => clearInterval(i)
+    setZones(pairs.filter(p => p.active).flatMap(p => computeZones(p)))
   }, [pairs])
+
+  // Also recompute on a fixed 5-min interval (reads from ref so interval is stable)
+  useEffect(() => {
+    const i = setInterval(() => {
+      const cur = pairsRefForZones.current
+      if (cur.length === 0) return
+      setZones(cur.filter(p => p.active).flatMap(p => computeZones(p)))
+    }, ZONE_RECOMPUTE_MS)
+    return () => clearInterval(i)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Single-pair analysis triggered by zone entry or manual trigger
   const runPairScan = useCallback(async (p: Pair, triggerLabel: string) => {
@@ -700,7 +711,7 @@ export default function TradeApp() {
   const handleAddCustomPair = (sym: string, group: string) => {
     const digits = guessDigits(sym)
     const existingCustom = pairs.filter(p => p.id >= 1000)
-    const id = 1000 + existingCustom.length
+    const id = existingCustom.length > 0 ? Math.max(...existingCustom.map(p => p.id)) + 1 : 1000
     const def: CustomPairDef = { sym, name: sym, group, digits, spread: 1.0 }
     const defs = loadCustomDefs()
     saveCustomDefs([...defs, def])

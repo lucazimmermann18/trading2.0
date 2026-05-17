@@ -100,6 +100,7 @@ function OHLCTooltip({ bar, digits }: { bar: CrosshairBar | null; digits: number
 function RSIChart({ bars }: { bars: OHLCBar[] }) {
   const closes = bars.map(b => b.close)
   const rsi = calcRSI(closes)
+  if (rsi.length < 2) return null
   const W = 1000, H = 80, pad = 4
   const toY = (v: number) => pad + (1 - (v - 0) / 100) * (H - pad * 2)
   const path = rsi.map((v, i) => {
@@ -620,7 +621,7 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
     load()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pair.id, timeframe, !!candleRef.current])
+  }, [pair.id, timeframe])
 
   // Update latest bar on price tick
   useEffect(() => {
@@ -630,7 +631,9 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
     lineRef.current?.update({ time: last.time, value: last.close })
     setBars(prev => {
       if (!prev.length) return prev
-      return [...prev.slice(0, -1), { ...prev[prev.length - 1], close: last.close }]
+      const lastPrev = prev[prev.length - 1]
+      if (lastPrev.time !== last.time) return prev
+      return [...prev.slice(0, -1), { ...lastPrev, close: last.close }]
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pair.px])

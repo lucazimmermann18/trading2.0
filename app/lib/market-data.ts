@@ -79,12 +79,11 @@ export function fmt(px: number, digits: number): string {
 // ── Technical Indicator Calculations ───────────────────────────
 
 export function calcEMA(values: number[], period: number): number[] {
+  if (!values.length) return []
   const k = 2 / (period + 1)
-  const ema: number[] = []
-  let e = values[0] ?? 0
-  for (const v of values) {
-    e = v * k + e * (1 - k)
-    ema.push(e)
+  const ema: number[] = [values[0]]
+  for (let i = 1; i < values.length; i++) {
+    ema.push(values[i] * k + ema[i - 1] * (1 - k))
   }
   return ema
 }
@@ -202,10 +201,10 @@ export function detectMarketRegime(bars: OHLCBar[]): { regime: MarketRegime; str
 
   const lastHighs = swingHighs.slice(-4)
   const lastLows  = swingLows.slice(-4)
-  const hhCount = lastHighs.filter((h, i) => i === 0 || h > lastHighs[i-1]).length
-  const hlCount = lastLows.filter((l, i) => i === 0 || l > lastLows[i-1]).length
-  const lhCount = lastHighs.filter((h, i) => i === 0 || h < lastHighs[i-1]).length
-  const llCount = lastLows.filter((l, i) => i === 0 || l < lastLows[i-1]).length
+  const hhCount = lastHighs.filter((h, i) => i > 0 && h > lastHighs[i-1]).length
+  const hlCount = lastLows.filter((l, i) => i > 0 && l > lastLows[i-1]).length
+  const lhCount = lastHighs.filter((h, i) => i > 0 && h < lastHighs[i-1]).length
+  const llCount = lastLows.filter((l, i) => i > 0 && l < lastLows[i-1]).length
 
   // ATR vs directional move (choppy = ATR high but price going nowhere)
   const atr = calcATR(recent)

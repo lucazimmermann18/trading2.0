@@ -18,7 +18,8 @@ interface Props {
  * respects the moved stop loss.
  */
 export function useTradeManager({ pairs, history, setPairs, setHistory, onBreakevenMove }: Props) {
-  const onMoveRef = useRef(onBreakevenMove)
+  const onMoveRef  = useRef(onBreakevenMove)
+  const movedRef   = useRef<Set<string>>(new Set())
   onMoveRef.current = onBreakevenMove
 
   useEffect(() => {
@@ -38,6 +39,7 @@ export function useTradeManager({ pairs, history, setPairs, setHistory, onBreake
       const key = `${p.sym}:${p.signal.time}`
       const histEntry = tp1Entries.get(key)
       if (!histEntry) continue
+      if (movedRef.current.has(key)) continue  // already processed
 
       const { side, entry, sl, tp1, tp2 } = p.signal
       const price = p.px
@@ -62,6 +64,9 @@ export function useTradeManager({ pairs, history, setPairs, setHistory, onBreake
     }
 
     if (pairUpdates.length === 0) return
+
+    // Mark these keys so we don't re-process them on future ticks
+    for (const u of historyUpdates) movedRef.current.add(`${u.sym}:${u.time}`)
 
     // Update pair signals
     setPairs(prev => prev.map(p => {

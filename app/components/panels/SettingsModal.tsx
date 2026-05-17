@@ -831,7 +831,7 @@ export default function SettingsModal({
               onClick={onClose}
               className="h-8 px-4 rounded-md bg-accent-blue text-ink-950 text-[12px] font-semibold hover:bg-accent-blue/90 transition"
             >
-              Save changes
+              Done
             </button>
           </div>
         </div>

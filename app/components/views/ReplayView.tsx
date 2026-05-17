@@ -1,5 +1,5 @@
 "use client"
-import { useState, useEffect, useMemo, useCallback } from "react"
+import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import type { Pair, HistoryEntry } from "@/app/lib/types"
 import { fmt } from "@/app/lib/market-data"
 import { fetchBars } from "@/app/lib/twelvedata"
@@ -172,9 +172,11 @@ export default function ReplayView({ history, pairs }: Props) {
   const [speed, setSpeed] = useState(600)
   const [loadedBars, setLoadedBars] = useState<Record<string, OHLCBar[]>>({})
   const [fetchingSym, setFetchingSym] = useState<string | null>(null)
+  const fetchingRef = useRef<string | null>(null)
 
   const loadBarsForSym = useCallback(async (sym: string) => {
-    if (fetchingSym === sym) return
+    if (fetchingRef.current === sym) return
+    fetchingRef.current = sym
     setFetchingSym(sym)
     try {
       const bars = await fetchBars(sym, "H1", 220)
@@ -183,8 +185,10 @@ export default function ReplayView({ history, pairs }: Props) {
         setCachedBars(sym, bars)
       }
     } catch { /* non-critical */ }
+    fetchingRef.current = null
     setFetchingSym(null)
-  }, [fetchingSym])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (!playing) return
