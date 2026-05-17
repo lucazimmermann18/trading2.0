@@ -40,6 +40,7 @@ import { useTradeReview } from "@/app/hooks/useTradeReview"
 import { loadHistory, saveHistory, patchHistoryEntry } from "@/app/lib/history-store"
 import { useEconomicCalendar } from "@/app/hooks/useEconomicCalendar"
 import { getRecentLessons } from "@/app/lib/lessons-store"
+import { useSessionGate } from "@/app/hooks/useSessionGate"
 
 
 // ── Custom pair storage ───────────────────────────────────────
@@ -91,6 +92,8 @@ export default function TradeApp() {
   const notifSettings = useNotificationSettings()
   const { loaded: persLoaded, state: persState, save: persSave } = usePersistedState()
   const { upcoming: calendarUpcoming, minutesUntil, getBlockingEvent } = useEconomicCalendar()
+  const [sessionClock, setSessionClock] = useState(Date.now())
+  const sessionGate = useSessionGate(sessionClock)
 
   const logEvent = useCallback((kind: AuditKind, msg: string) => {
     setAuditLog(prev => [{ id: auditIdRef.current++, time: Date.now(), kind, msg }, ...prev].slice(0, 120))
@@ -298,8 +301,11 @@ export default function TradeApp() {
 
   // Dual countdown: tactical (5 min) + strategic (30 min)
   useEffect(() => {
+    let tick = 0
     const i = setInterval(() => {
+      tick++
       setSessions(activeSessions())
+      if (tick % 60 === 0) setSessionClock(Date.now())  // refresh session gate every minute
       if (!warmupDoneRef.current) {
         setSecondsLeft(300)
         setStrategicSecsLeft(s => s)
@@ -374,6 +380,10 @@ export default function TradeApp() {
     const { settings } = aiSettings
     if (!settings.useAI || !settings.apiKeys[settings.activeProvider]) {
       logEvent("config", "AI not configured — add an API key in Settings")
+      return
+    }
+    if (!sessionGate.allowed) {
+      logEvent("config", `Strategic scan skipped — ${sessionGate.reason}`)
       return
     }
     const activePairs = pairs.filter(p => p.active && p.history.length >= 50)
@@ -465,12 +475,13 @@ export default function TradeApp() {
     logEvent("scan", `Strategic done — ${tradeCount} signals · ${watchCount} watching · avg ${avgLat}ms${cacheSuffix}`)
     setMetrics(prev => ({ ...prev, scanCount: prev.scanCount + 1, signalCount: prev.signalCount + tradeCount, lastAILatency: avgLat }))
     setScanning(false)
-  }, [pairs, aiSettings, skillset, threshold, timeframe, logEvent, calendarUpcoming, minutesUntil, buildAIBody, issueSignal])
+  }, [pairs, aiSettings, skillset, threshold, timeframe, logEvent, calendarUpcoming, minutesUntil, buildAIBody, issueSignal, sessionGate])
 
   // ── Tactical scan: ONLY pairs near their watch zones ──────────
   const runTacticalScan = useCallback(async () => {
     const { settings } = aiSettings
     if (!settings.useAI || !settings.apiKeys[settings.activeProvider]) return
+    if (!sessionGate.allowed) return  // silently skip — strategic already logged the reason
     const tacticalPairs = pairs.filter(p => p.active && p.scanPhase === "tactical" && p.history.length >= 50)
     if (!tacticalPairs.length) return
 
@@ -508,7 +519,7 @@ export default function TradeApp() {
     }))
 
     setScanning(false)
-  }, [pairs, aiSettings, skillset, threshold, timeframe, logEvent, buildAIBody, issueSignal])
+  }, [pairs, aiSettings, skillset, threshold, timeframe, logEvent, buildAIBody, issueSignal, sessionGate])
 
   // Strategic fires every 30 min; tactical fires every 5 min (only if pairs waiting)
   useEffect(() => {
@@ -791,6 +802,9 @@ export default function TradeApp() {
           warmupDone={warmupDone}
           barsReady={barsReadyCount}
           totalActive={activePairsList.length}
+          sessionAllowed={sessionGate.allowed}
+          sessionReason={sessionGate.reason}
+          currentSessions={sessionGate.currentSessions}
         />
 
         {/* Main content area */}

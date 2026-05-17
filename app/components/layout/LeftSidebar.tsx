@@ -18,6 +18,9 @@ interface Props {
   warmupDone: boolean
   barsReady: number
   totalActive: number
+  sessionAllowed: boolean
+  sessionReason: string
+  currentSessions: string[]
 }
 
 function TimerRing({
@@ -207,7 +210,7 @@ function PairRow({
   )
 }
 
-export default function LeftSidebar({ pairs, selectedId, onSelect, onToggleActive, secondsLeft, strategicSecsLeft, scanning, scannerOn, zones, warmupDone, barsReady, totalActive }: Props) {
+export default function LeftSidebar({ pairs, selectedId, onSelect, onToggleActive, secondsLeft, strategicSecsLeft, scanning, scannerOn, zones, warmupDone, barsReady, totalActive, sessionAllowed, sessionReason, currentSessions }: Props) {
   const [search, setSearch] = useState("")
   const activeCount = pairs.filter(p => p.active).length
   const tradeCount = pairs.filter(p => p.status === "TRADE").length
@@ -282,7 +285,7 @@ export default function LeftSidebar({ pairs, selectedId, onSelect, onToggleActiv
       </div>
 
       {/* Scanner timer */}
-      <div className="p-3 border-t hairline">
+      <div className="p-3 border-t hairline space-y-2">
         <ScanTimer
           secondsLeft={secondsLeft}
           strategicSecsLeft={strategicSecsLeft}
@@ -292,7 +295,32 @@ export default function LeftSidebar({ pairs, selectedId, onSelect, onToggleActiv
           totalActive={totalActive}
           tacticalCount={tacticalCount}
         />
-        <div className="mt-2 flex items-center justify-between px-1">
+
+        {/* Session gate status */}
+        <div className={`px-2.5 py-2 rounded-md flex items-center gap-2 text-[10px]
+          ${sessionAllowed
+            ? "bg-accent-green/[0.07] border border-accent-green/20"
+            : "bg-amber-500/[0.07] border border-amber-500/20"}`}>
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${sessionAllowed ? "bg-accent-green" : "bg-amber-400 animate-pulse"}`} />
+          <div className="min-w-0">
+            {sessionAllowed ? (
+              <span className="text-accent-green font-semibold tracking-wide">
+                TRADING ACTIVE
+                {currentSessions.length > 0 && (
+                  <span className="font-normal text-accent-green/70 ml-1">
+                    · {currentSessions.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join("/")}
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span className="text-amber-400 font-semibold tracking-wide truncate block" title={sessionReason}>
+                BLOCKED · {sessionReason || "Session disabled"}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between px-1">
           <div className="text-[10px] text-mute tracking-[0.12em] uppercase">AI Scanner</div>
           <div className={`text-[10px] font-bold tracking-[0.16em] ${scannerOn ? "text-accent-green" : "text-mute"}`}>
             {scannerOn ? "● ACTIVE" : "○ PAUSED"}
