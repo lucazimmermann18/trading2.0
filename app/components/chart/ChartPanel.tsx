@@ -721,16 +721,17 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
           </button>
         </div>
 
-        {/* Timeframe */}
-        <div className="flex items-center gap-1 px-1 py-0.5 rounded-md glass">
+        {/* Timeframe dropdown */}
+        <select
+          value={timeframe}
+          onChange={e => setTimeframe(e.target.value as Timeframe)}
+          className="h-7 px-2 rounded-md glass text-[11px] font-medium num text-white border border-white/[0.08]
+            bg-ink-900 cursor-pointer focus:outline-none focus:border-accent-blue/50 transition"
+        >
           {TIMEFRAMES.map(tf => (
-            <button key={tf} onClick={() => setTimeframe(tf)}
-              className={`h-7 px-2.5 rounded-[5px] text-[11px] font-medium num transition
-                ${timeframe === tf ? "bg-white/[0.08] text-white" : "text-mute hover:text-white"}`}>
-              {tf}
-            </button>
+            <option key={tf} value={tf}>{tf}</option>
           ))}
-        </div>
+        </select>
       </div>
 
       {/* Chart area + sub-charts */}
