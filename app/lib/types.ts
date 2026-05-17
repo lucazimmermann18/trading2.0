@@ -1,3 +1,17 @@
+export interface WatchZone {
+  id: string
+  direction: "BUY" | "SELL"
+  zoneTop: number
+  zoneBottom: number
+  activateAt: number     // price level that triggers tactical mode
+  reason: string
+  invalidateIf: string
+  createdAt: number
+  expiresAt: number
+}
+
+export type MarketRegime = "trending_up" | "trending_down" | "ranging" | "choppy"
+
 export interface Pair {
   id: number
   sym: string
@@ -13,10 +27,27 @@ export interface Pair {
   lastScan: number
   history: OHLCBar[]
   h4History?: OHLCBar[]
+  d1History?: OHLCBar[]
+  regime?: MarketRegime
   reasoning: string
   confidence: number
   rsi: number
   macd: number
+  watchZones?: WatchZone[]
+  scanPhase?: "idle" | "watching" | "tactical"
+}
+
+export interface TradeLesson {
+  id: string
+  sym: string
+  side: "BUY" | "SELL"
+  outcome: "TP2" | "TP1" | "SL" | "EXPIRED"
+  pnl_r: number
+  time: number
+  lesson: string
+  strengths: string[]
+  mistakes: string[]
+  nextTime: string
 }
 
 export interface OHLCBar {
@@ -81,7 +112,7 @@ export interface Session {
   active: boolean
 }
 
-export type ViewId = "dashboard" | "multichart" | "heatmap" | "performance" | "journal" | "replay" | "system" | "mtf"
+export type ViewId = "dashboard" | "multichart" | "heatmap" | "performance" | "journal" | "replay" | "system" | "mtf" | "intermarket"
 export type Timeframe = "M1" | "M5" | "M15" | "H1" | "H4" | "D1"
 
 export type AuditKind = "scan" | "signal" | "zone" | "tp" | "sl" | "config" | "ai" | "feed"

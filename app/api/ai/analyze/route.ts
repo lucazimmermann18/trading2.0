@@ -36,6 +36,46 @@ interface SMCData {
   daily: SMCDaily
 }
 
+interface D1ContextData {
+  trend: "UP" | "DOWN" | "NEUTRAL"
+  rsi: number
+  regime: string
+  support: number[]
+  resistance: number[]
+  lastClose: number
+  lastBarBullish: boolean
+  weekHigh: number
+  weekLow: number
+  monthHigh: number
+  monthLow: number
+}
+
+interface TradeLessonSummary {
+  sym: string
+  side: "BUY" | "SELL"
+  outcome: string
+  pnl_r: number
+  lesson: string
+  mistakes: string[]
+  nextTime: string
+}
+
+interface WatchZoneInput {
+  direction: "BUY" | "SELL"
+  zoneTop: number
+  zoneBottom: number
+  activateAt: number
+  reason: string
+  invalidateIf: string
+}
+
+interface UpcomingNews {
+  time: string
+  event: string
+  impact: string
+  minsUntil: number
+}
+
 interface AnalyzeRequest {
   provider: "anthropic" | "openai" | "deepseek" | "gemini"
   model: string
@@ -63,105 +103,154 @@ interface AnalyzeRequest {
   htf: HTFContext
   // SMC context
   smc: SMCData
+  // Two-phase fields
+  phase: "strategic" | "tactical"
+  watchContext?: WatchZoneInput[]   // populated in tactical phase
+  upcomingNews?: UpcomingNews[]
+  session?: string
+  // AI autonomy enhancements
+  regime?: string
+  regimeStrength?: number
+  d1Context?: D1ContextData
+  lessons?: TradeLessonSummary[]
 }
 
-interface SignalResult {
-  side: "BUY" | "SELL" | "NO TRADE"
-  confidence: number
-  entry: number
-  sl: number
-  tp1: number
-  tp2: number
-  rr: string
-  confluences: string[]
-  reasoning: string
+interface WatchZoneResult {
+  direction: "BUY" | "SELL"
+  zoneTop: number
+  zoneBottom: number
+  activateAt: number
+  reason: string
+  invalidateIf: string
+}
+
+interface AIResult {
+  status: "TRADE" | "WATCH" | "NO_TRADE"
+  // TRADE fields
+  side?: "BUY" | "SELL"
+  confidence?: number
+  entry?: number
+  sl?: number
+  tp1?: number
+  tp2?: number
+  rr?: string
+  confluences?: string[]
+  reasoning?: string
+  // WATCH fields
+  watchZones?: WatchZoneResult[]
+  // Cache metadata (added server-side, not from Claude)
+  _cache?: { hit: boolean; savedTokens: number }
 }
 
 // ── System Prompt ──────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are an elite institutional trading desk analyst. Your mandate is simple: identify ONLY the highest-probability Smart Money setups that a professional prop trader would stake real capital on. You will output NO TRADE the overwhelming majority of the time. Precision over frequency — one A+ signal per week beats 20 mediocre ones.
+const SYSTEM_PROMPT = `You are an elite institutional trading analyst. You operate in two phases and output only valid JSON.
 
-## ABSOLUTE PREREQUISITES — ALL must be true or the answer is NO TRADE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## OPERATING MODES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**P1 — Session (hard gate, no exceptions):**
-Active London session (08:00-17:00 UTC) OR active New York session (13:00-22:00 UTC). Outside these windows, institutional liquidity is insufficient. Return NO TRADE immediately without further analysis.
+### STRATEGIC PHASE
+Full market analysis. No levels have been pre-filtered. You see everything.
+Decision tree:
+  1. Is there an IMMEDIATE A+ or A setup right now? → output TRADE
+  2. Are there key institutional zones where a setup could develop? → output WATCH (max 2 zones)
+  3. Nothing actionable (choppy, no levels, no bias) → output NO_TRADE
 
-**P2 — 3-Timeframe Alignment:**
-D1 bias, H4 structure, and H1 structure must all point in the same direction. Two out of three is acceptable ONLY if the dissenting TF is NEUTRAL (not opposing). A fully opposing TF = NO TRADE.
+### TACTICAL PHASE
+Price has reached a zone you previously flagged. You receive the original watch context.
+Decision tree:
+  1. Is there a valid entry trigger at this zone NOW (candle pattern, BOS, sweep)? → output TRADE
+  2. Is the setup invalidated or conditions not met? → output NO_TRADE with reason
 
-**P3 — Price at an Institutional Level:**
-Price must be within 0.3×ATR of one of these levels (in priority order):
-  1. D1 Order Block (strongest — where large banks positioned)
-  2. H4 Order Block (strong — high timeframe institutional interest)
-  3. H1 Order Block (entry-grade — confirmed unmitigated)
-  4. Unfilled Fair Value Gap (imbalance that must be corrected)
-  NOT at a level = NO TRADE. Price chasing = NO TRADE.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## ANALYTICAL FRAMEWORK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**P4 — Correct Market Zone:**
-- BUY: price must be in DISCOUNT zone (<50% of swing range) or OTE (62-79% retracement)
-- SELL: price must be in PREMIUM zone (>50% of swing range) or OTE
-Price at equilibrium (45-55%) with no OB/FVG = NO TRADE.
+### SIGNAL QUALITY TIERS
 
-**P5 — Candle Confirmation (required, not optional):**
-A reversal candle pattern at the level is mandatory for signal issuance:
-- Strength 3 (A+): Bullish/Bearish Engulfing, Morning/Evening Star, Three Soldiers/Crows
-- Strength 2 (A): Hammer, Shooting Star, Pin Bar, Doji with strong wick rejection
-- Strength 1: Not sufficient on its own — needs sweep or divergence as substitute
-No candle confirmation at the level = downgrade confidence by 15 points minimum.
-
-## SIGNAL QUALITY TIERS
-
-### A+ SETUP — confidence 90-95 (take every time):
-✓ D1 + H4 + H1 all aligned
+A+ SETUP — confidence 90-95 (take every time):
+✓ D1 + H4 + H1 all aligned in same direction
 ✓ Fresh liquidity sweep within last 5 bars (stop hunt → reversal)
 ✓ Price at D1 or H4 OB in OTE zone (62-79% retracement)
-✓ Strength-3 candle pattern at the level
+✓ Strength-3 candle pattern at the level (Engulfing, Morning/Evening Star)
 ✓ RSI divergence OR RSI extreme (<30 / >70)
-✓ Active London-NY overlap (13:00-17:00 UTC) — highest volume
 ✓ RR ≥ 1:3.5
 
-### A SETUP — confidence 83-89 (take if spread acceptable):
+A SETUP — confidence 83-89 (take if clean):
 ✓ H4 + H1 aligned (D1 neutral acceptable)
-✓ Price at H4 or H1 OB (unmitigated, strength 2-3)
-✓ Strength-2+ candle pattern at level
-✓ RSI extreme OR MACD crossover confirmed
-✓ Active London or NY session
+✓ Price at H4 or H1 OB (unmitigated)
+✓ Strength-2+ candle confirmation
+✓ RSI extreme OR MACD crossover
 ✓ RR ≥ 1:3.0
 
-### B SETUP — confidence 75-82 (marginal — tighten sizing):
+B SETUP — confidence 75-82 (only if exceptionally clean):
 ✓ H4 + H1 aligned
 ✓ Price at H1 OB or unfilled FVG
 ✓ Any candle confirmation
-✓ One classical indicator confirmation
-✓ Active session
 ✓ RR ≥ 1:2.8
-→ Only issue B setups if the data is exceptionally clean. When in doubt, NO TRADE.
+→ When in doubt, output WATCH instead of forcing a B setup.
 
-## TRADE CONSTRUCTION RULES
-- Entry: at the OB midpoint or FVG midpoint — NEVER above/below the level
-- SL: 1 pip below the OB low (BUY) or 1 pip above the OB high (SELL); minimum 1.5×ATR distance
-- TP1: exactly 55% of the distance from entry to TP2
-- TP2: next major structural level (swing high/low, PDH/PDL, weekly level) — minimum 1:3.0 RR; if not achievable = NO TRADE
-- Spread check: if spread > 0.08% of price → NO TRADE (execution slippage kills the edge)
+### ENTRY CONSTRUCTION
+- Entry: at OB midpoint or FVG midpoint — never chase price
+- SL: 1 pip below OB low (BUY) or above OB high (SELL); minimum 1.5×ATR distance
+- TP1: 55% of distance to TP2
+- TP2: next major structural level (PDH/PDL/weekly); minimum 1:3.0 RR
+- If TP2 at 1:3.0 not achievable → output NO_TRADE or WATCH
 
-## LIQUIDITY SWEEP BONUS
-A sweep within the last 5 bars where price wicked through a key level and reversed closes:
-- Sell-side sweep (equal lows broken, close above) → BUY signal potential — confidence +12 points
-- Buy-side sweep (equal highs broken, close below) → SELL signal potential — confidence +12 points
-Sweep + OB + candle = the highest-quality setup possible. Prioritize these above all.
+### WATCH ZONE RULES
+Define zones where the price action has NOT yet developed but institutional interest exists:
+- D1 or H4 Order Block that price hasn't reached yet
+- Key PDH/PDL/weekly levels with OB confluence
+- FVG that has been unmitigated and is below/above current price
+- Liquidity pool that is likely to be targeted before reversal
+- activateAt: the price level just BEFORE the zone (for BUY: slightly above zoneTop; for SELL: slightly below zoneBottom) — this triggers re-analysis
 
-## OUTPUT — strict JSON only, no markdown, no explanation outside the JSON:
-{
-  "side": "BUY" | "SELL" | "NO TRADE",
-  "confidence": <integer 0-100>,
-  "entry": <number — OB/FVG midpoint>,
-  "sl": <number — beyond OB extreme, min 1.5×ATR>,
-  "tp1": <number — 55% of TP2 distance>,
-  "tp2": <number — structural target, min 1:3.0 RR>,
-  "rr": "<string e.g. '3.20'>",
-  "confluences": [<list every met condition: structure, zone, OB/FVG details, sweep, candle pattern, RSI, session>],
-  "reasoning": "<exactly 4 sentences: (1) D1+H4+H1 structure alignment verdict, (2) exact OB/FVG level being traded and why it is valid/unmitigated, (3) liquidity context — sweep or lack thereof — plus candle pattern name and what it signals, (4) SL placement rationale and TP2 structural target with RR>"
-}`
+### MARKET REGIME ADAPTATION
+You will receive a detected market regime. Adapt your strategy accordingly:
+- trending_up / trending_down (strength ≥ 70): Favor continuation setups. Breakouts from consolidation zones are valid. OBs in the trend direction carry higher weight. Counter-trend setups need A+ confluences.
+- ranging (strength 50-69): Favor OB-to-OB fades. Only trade from extreme ends of the range. TP2 = opposite range boundary. Be cautious of false breakouts.
+- choppy (strength ≥ 70): Output NO_TRADE or conservative WATCH zones only. Choppy conditions destroy edge. The only valid entry is after a confirmed BOS from the chop.
+
+### D1 MULTI-TIMEFRAME TOP-DOWN PROCESS (mandatory)
+Always analyze top-down: D1 → H4 → H1. You will receive actual D1 bar context.
+Step 1 (D1): Establish the macro bias. D1 trend = the "law". Only trade with D1 trend, or wait for D1 structure shift.
+Step 2 (H4): Find the setup location. H4 OBs and FVGs are the primary entry zones.
+Step 3 (H1): Time the exact entry. H1 confirmation (BOS, sweep, pattern) is the trigger.
+If any two timeframes conflict, reduce confidence by 15 points. If all three conflict, output NO_TRADE.
+
+### QUALITY GATES (informational — factor into confidence, do not hard-block)
+- Session: London (07-17 UTC) and NY (13-22 UTC) produce highest-quality setups. Off-hours reduces quality.
+- News: High-impact events within 60 min = reduce confidence significantly or output NO_TRADE.
+- Spread: > 0.08% of price = significantly reduces edge, factor into confidence.
+- Trend conflict: D1 opposing H4/H1 = reduce confidence or wait for resolution.
+
+### LEARNING FROM PAST TRADES
+You will receive lessons from recent completed trades on this instrument. Use them to:
+- Avoid repeating documented mistakes
+- Recognize patterns that previously worked or failed
+- Adjust confidence if the same setup context led to a loss recently
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## OUTPUT FORMATS — strict JSON only, no markdown
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TRADE (immediate entry):
+{ "status": "TRADE", "side": "BUY"|"SELL", "confidence": <int 75-95>, "entry": <num>, "sl": <num>, "tp1": <num>, "tp2": <num>, "rr": "<str e.g. '3.20'>", "confluences": ["<list each met condition>"], "reasoning": "<4 sentences: (1) D1+H4+H1 alignment verdict, (2) exact OB/FVG level being traded and why valid, (3) sweep/candle pattern context, (4) SL rationale and TP2 target with RR>" }
+
+WATCH (define zones, no immediate entry):
+{ "status": "WATCH", "watchZones": [{ "direction": "BUY"|"SELL", "zoneTop": <upper price>, "zoneBottom": <lower price>, "activateAt": <price just outside zone that triggers re-scan>, "reason": "<what makes this zone significant>", "invalidateIf": "<price action that invalidates this zone>" }], "reasoning": "<market overview: what you see, why no entry now, what needs to happen>" }
+
+NO_TRADE (nothing actionable):
+{ "status": "NO_TRADE", "reasoning": "<brief: market condition and what would need to change for a setup>" }
+
+ABSOLUTE RULES:
+1. Output ONLY valid JSON. No text before or after.
+2. WATCH zones: maximum 2. Name only the highest-conviction zones.
+3. TRADE confidence minimum 75. Below 75 = output WATCH or NO_TRADE.
+4. RR for TP2 must be ≥ 1:3.0. If not achievable = NO_TRADE or WATCH.
+5. All price levels must be derived from the actual data provided. Never invent levels.
+6. In TACTICAL phase: only TRADE or NO_TRADE. Do not output WATCH.`
 
 // ── User Prompt Builder ────────────────────────────────────────
 
@@ -174,7 +263,7 @@ function buildPrompt(r: AnalyzeRequest): string {
   const macdDir  = r.macdLine > r.signalLine ? "BULLISH crossover" : "BEARISH crossover"
   const bbWidth  = r.bb.upper - r.bb.lower
   const bbPos    = bbWidth > 0 ? Math.round((r.px - r.bb.lower) / bbWidth * 100) : 50
-  const bbLabel  = bbPos < 20 ? "Near LOWER band — reversal zone" : bbPos > 80 ? "Near UPPER band — reversal zone" : "Mid-range"
+  const bbLabel  = bbPos < 20 ? "Near LOWER band" : bbPos > 80 ? "Near UPPER band" : "Mid-range"
 
   const htfRsiLabel = r.htf.rsi > 65 ? "overbought" : r.htf.rsi < 35 ? "oversold" : "neutral"
   const atrSL    = (r.atr * 1.5).toFixed(d)
@@ -188,7 +277,6 @@ function buildPrompt(r: AnalyzeRequest): string {
     `${new Date(b.time * 1000).toISOString().slice(11, 16)} O:${b.open.toFixed(d)} H:${b.high.toFixed(d)} L:${b.low.toFixed(d)} C:${b.close.toFixed(d)}`
   ).join("\n")
 
-  // SMC formatting
   const smc = r.smc
   const struct = smc.structure
   const swingRange = struct.recentSwingHigh - struct.recentSwingLow
@@ -201,19 +289,19 @@ function buildPrompt(r: AnalyzeRequest): string {
     ? smc.orderBlocks.map(ob =>
         `  H1 ${ob.type.toUpperCase()} OB: ${ob.low.toFixed(d)}–${ob.high.toFixed(d)} | mid ${ob.mid.toFixed(d)} | str ${"★".repeat(ob.strength)}${"☆".repeat(3 - ob.strength)}`
       ).join("\n")
-    : "  None detected"
+    : "  None"
 
   const h4ObLines = smc.h4OrderBlocks?.length > 0
     ? smc.h4OrderBlocks.map(ob =>
-        `  H4 ${ob.type.toUpperCase()} OB ★★★: ${ob.low.toFixed(d)}–${ob.high.toFixed(d)} | mid ${ob.mid.toFixed(d)} | str ${"★".repeat(ob.strength)}${"☆".repeat(3 - ob.strength)}`
+        `  H4 ${ob.type.toUpperCase()} OB: ${ob.low.toFixed(d)}–${ob.high.toFixed(d)} | mid ${ob.mid.toFixed(d)} | str ${"★".repeat(ob.strength)}${"☆".repeat(3 - ob.strength)}`
       ).join("\n")
-    : "  None detected"
+    : "  None"
 
   const sweepLines = smc.sweeps?.length > 0
     ? smc.sweeps.map(sw =>
         `  ⚡ ${sw.type.toUpperCase()} SWEEP: ${sw.level.toFixed(d)} | ${sw.barsAgo} bar${sw.barsAgo !== 1 ? "s" : ""} ago | str ${"★".repeat(sw.strength)}${"☆".repeat(3 - sw.strength)}${sw.barsAgo <= 3 ? " ← VERY FRESH" : sw.barsAgo <= 8 ? " ← Fresh" : ""}`
       ).join("\n")
-    : "  None detected — no recent stop hunt"
+    : "  None"
 
   const daily = smc.daily
   const d1ObLines = daily?.d1OBs?.length > 0
@@ -224,127 +312,191 @@ function buildPrompt(r: AnalyzeRequest): string {
 
   const divLine = smc.divergence
     ? `  ${smc.divergence.type.toUpperCase()} RSI DIVERGENCE (${smc.divergence.strength}) — strong momentum signal`
-    : "  None detected"
+    : "  None"
 
   const fvgLines = smc.fvgs.length > 0
     ? smc.fvgs.map(fvg =>
         `  ${fvg.type.toUpperCase()} FVG: ${fvg.bottom.toFixed(d)}–${fvg.top.toFixed(d)} | mid ${fvg.mid.toFixed(d)}`
       ).join("\n")
-    : "  None detected"
+    : "  None"
 
   const liqLines = smc.liquidity.length > 0
     ? smc.liquidity.map(lv =>
         `  ${lv.type === "buyside" ? "BSL" : "SSL"}: ${lv.price.toFixed(d)} (${lv.touches} touches)`
       ).join("\n")
-    : "  None detected"
+    : "  None"
 
-  const sessionStr = r.activeSessions.length > 0 ? r.activeSessions.join(", ") : "None — off-hours"
+  const sessionStr = r.activeSessions.length > 0 ? r.activeSessions.join(", ") : "Off-hours"
 
-  return `=== INSTRUMENT ===
-Symbol:        ${r.sym}
-Current Price: ${r.px.toFixed(d)}
-Spread:        ${r.spread} (${spreadPct}% of price)${parseFloat(spreadPct) > 0.08 ? " ← SPREAD TOO HIGH → NO TRADE" : ""}
-Strategy:      ${r.skillset}
+  const newsStr = r.upcomingNews?.length
+    ? r.upcomingNews.map(n => `  ${n.event} in ${n.minsUntil}m (${n.impact} impact)`).join("\n")
+    : "  None in next 2 hours"
 
-=== GATE CHECK (answer these first — any NO = return NO TRADE immediately) ===
-G1 Session: ${sessionStr} — London (08-17 UTC) or NY (13-22 UTC) required. Currently: ${sessionStr.includes("London") || sessionStr.includes("New York") ? "✓ PASS" : "✗ FAIL → NO TRADE"}
-G2 Alignment: D1=${daily?.d1Bias ?? "N/A"}, H4=${r.htf.trend}, H1=${struct.bias} — need 3/3 aligned or 2/3 with neutral dissenter.
-G3 Spread: ${spreadPct}% — must be <0.08%. ${parseFloat(spreadPct) > 0.08 ? "✗ FAIL → NO TRADE" : "✓ PASS"}
+  // Tactical phase context
+  const tacticalBlock = r.phase === "tactical" && r.watchContext?.length
+    ? `\n=== TACTICAL CONFIRMATION — ZONE REACHED ===
+You previously flagged these zones. Price is now at or near them.
+${r.watchContext.map(z =>
+  `  ${z.direction} ZONE: ${z.zoneBottom.toFixed(d)}–${z.zoneTop.toFixed(d)} | activateAt: ${z.activateAt.toFixed(d)}
+  Reason: ${z.reason}
+  Invalidate if: ${z.invalidateIf}`
+).join("\n")}
+Your task: Is there a valid entry trigger NOW (candle pattern, fresh BOS, sweep at zone)? → TRADE or NO_TRADE.`
+    : ""
 
-=== DAILY CONTEXT (D1 — highest TF, institutional positioning) ===
-D1 Bias:      ${daily?.d1Bias ?? "N/A"} (3-day direction of closes)
-PDH:          ${daily?.pdHigh?.toFixed(d) ?? "N/A"} ← previous day high (institutional resistance / BSL)
-PDL:          ${daily?.pdLow?.toFixed(d) ?? "N/A"} ← previous day low (institutional support / SSL)
-Weekly Range: ${daily?.weekLow?.toFixed(d) ?? "N/A"} – ${daily?.weekHigh?.toFixed(d) ?? "N/A"}
-D1 Order Blocks (highest-weight levels — price reacts to these for days):
+  // Market regime string
+  const regimeLabel = r.regime
+    ? `${r.regime.replace("_", " ").toUpperCase()} (strength ${r.regimeStrength ?? "?"}%)`
+    : "Unknown"
+
+  // D1 context block
+  const d1Block = r.d1Context ? `
+=== D1 MACRO CONTEXT (top-down step 1) ===
+D1 Trend:   ${r.d1Context.trend} | D1 Regime: ${r.d1Context.regime.replace("_", " ").toUpperCase()}
+D1 RSI:     ${r.d1Context.rsi.toFixed(1)} | Last D1 bar: ${r.d1Context.lastBarBullish ? "BULLISH" : "BEARISH"} close at ${r.d1Context.lastClose.toFixed(d)}
+Week Range: ${r.d1Context.weekLow.toFixed(d)} – ${r.d1Context.weekHigh.toFixed(d)}
+Month Range:${r.d1Context.monthLow.toFixed(d)} – ${r.d1Context.monthHigh.toFixed(d)}
+D1 Support:    ${r.d1Context.support.length ? r.d1Context.support.map(l => l.toFixed(d)).join(" | ") : "None"}
+D1 Resistance: ${r.d1Context.resistance.length ? r.d1Context.resistance.map(l => l.toFixed(d)).join(" | ") : "None"}`
+    : "\n=== D1 MACRO CONTEXT ===\nNo D1 data available — rely on SMC daily context."
+
+  // Lessons block
+  const lessonsBlock = r.lessons?.length
+    ? `\n=== LESSONS FROM RECENT TRADES ON ${r.sym} ===
+${r.lessons.map((l, i) => `[${i+1}] ${l.outcome} (${l.pnl_r > 0 ? "+" : ""}${l.pnl_r.toFixed(2)}R) ${l.side}
+  Lesson: ${l.lesson}
+  Mistakes: ${l.mistakes.join("; ") || "None"}
+  Next time: ${l.nextTime}`).join("\n")}`
+    : ""
+
+  return `=== PHASE: ${r.phase === "tactical" ? "TACTICAL CONFIRMATION" : "STRATEGIC ANALYSIS"} ===
+${r.phase === "strategic"
+  ? "Perform full analysis. Identify an immediate setup (TRADE), zones to monitor (WATCH), or output NO_TRADE."
+  : "Price reached a flagged zone. Confirm or reject the setup."}
+${tacticalBlock}
+${lessonsBlock}
+
+=== INSTRUMENT ===
+Symbol:    ${r.sym}
+Price:     ${r.px.toFixed(d)}
+Timeframe: ${r.timeframe} (all entry levels must be valid on this timeframe)
+Spread:    ${r.spread} (${spreadPct}% of price)
+Strategy:  ${r.skillset}
+Regime:    ${regimeLabel}
+
+=== SESSION & NEWS CONTEXT (factor into confidence) ===
+Session:  ${sessionStr}
+Upcoming: ${newsStr}
+${d1Block}
+
+=== INTRADAY REFERENCE LEVELS ===
+D1 Bias: ${daily?.d1Bias ?? "N/A"} | PDH: ${daily?.pdHigh?.toFixed(d) ?? "N/A"} | PDL: ${daily?.pdLow?.toFixed(d) ?? "N/A"}
+D1 Order Blocks (from SMC):
 ${d1ObLines}
 
-=== LIQUIDITY SWEEPS — highest quality setup trigger ===
+=== LIQUIDITY SWEEPS ===
 ${sweepLines}
 
 === RSI DIVERGENCE ===
 ${divLine}
 
 === H4 STRUCTURE ===
-H4 Trend:      ${r.htf.trend} ← primary direction filter
-H4 RSI:        ${r.htf.rsi.toFixed(1)} (${htfRsiLabel})
-H4 Resistance: ${r.htf.resistance.length > 0 ? r.htf.resistance.map(l => l.toFixed(d)).join(" | ") : "None"}
-H4 Support:    ${r.htf.support.length > 0 ? r.htf.support.map(l => l.toFixed(d)).join(" | ") : "None"}
-H4 Order Blocks (strong entry zones — institutional interest):
+Trend: ${r.htf.trend} | RSI: ${r.htf.rsi.toFixed(1)} (${htfRsiLabel})
+Resistance: ${r.htf.resistance.length > 0 ? r.htf.resistance.map(l => l.toFixed(d)).join(" | ") : "None"}
+Support:    ${r.htf.support.length > 0 ? r.htf.support.map(l => l.toFixed(d)).join(" | ") : "None"}
+H4 Order Blocks:
 ${h4ObLines}
 
 === H1 SMART MONEY ANALYSIS ===
-Structure:  ${struct.bias} | Zone: ${struct.zone}${struct.inOTE ? " ★ OTE ZONE" : ""} (${pos}% of swing range ${struct.recentSwingLow.toFixed(d)} → ${struct.recentSwingHigh.toFixed(d)})
-Last Break: ${lastBOSStr}
+Structure: ${struct.bias} | Zone: ${struct.zone}${struct.inOTE ? " ★ OTE" : ""} (${pos}% of swing ${struct.recentSwingLow.toFixed(d)}–${struct.recentSwingHigh.toFixed(d)})
+Last BOS:  ${lastBOSStr}
 
-H1 Order Blocks (unmitigated, nearest first):
+H1 Order Blocks:
 ${obLines}
 
-Fair Value Gaps (unfilled):
+Fair Value Gaps:
 ${fvgLines}
 
 Liquidity Pools:
 ${liqLines}
 
 === H1 INDICATORS ===
-RSI(14):   ${r.rsi.toFixed(1)} → ${rsiLabel}
-MACD:      Line ${r.macdLine.toFixed(d + 1)} | Signal ${r.signalLine.toFixed(d + 1)} | Hist ${r.histogram.toFixed(d + 1)} → ${macdDir}
-BB(20,2):  Upper ${r.bb.upper.toFixed(d)} Mid ${r.bb.mid.toFixed(d)} Lower ${r.bb.lower.toFixed(d)} | ${bbPos}% position → ${bbLabel}
-EMA Trend: ${r.trend} | ATR(14): ${r.atr.toFixed(d)} | 1.5×ATR SL: ${atrSL}
+RSI(14):  ${r.rsi.toFixed(1)} → ${rsiLabel}
+MACD:     Line ${r.macdLine.toFixed(d + 1)} | Signal ${r.signalLine.toFixed(d + 1)} → ${macdDir}
+BB(20,2): ${bbPos}% position → ${bbLabel}
+ATR(14):  ${r.atr.toFixed(d)} | 1.5×ATR SL distance: ${atrSL}
+EMA Trend: ${r.trend}
 
-=== CANDLE PATTERNS (last 5 bars — confirmation required) ===
+=== CANDLE PATTERNS (last 5 bars) ===
 ${patternStr}
 
-=== RECENT OHLCV (last 15 H1 bars, newest last) ===
-${ohlcv}
-
-=== DECISION CHECKLIST — work through in order, stop at first failure ===
-STEP 1 — Session gate: Is London or NY active? ${sessionStr.includes("London") || sessionStr.includes("New York") ? "YES → continue" : "NO → output NO TRADE, stop here."}
-STEP 2 — Alignment: Are D1+H4+H1 aligned (or 2/3 with neutral)? State which direction or conflict.
-STEP 3 — Level: Is price within 0.3×ATR (${(r.atr * 0.3).toFixed(d)}) of a D1 OB, H4 OB, H1 OB, or FVG? If no level nearby → NO TRADE.
-STEP 4 — Zone: DISCOUNT for BUY, PREMIUM for SELL. OTE zone is ideal. Mid-range without OB/FVG → NO TRADE.
-STEP 5 — Sweep: ${smc.sweeps?.length > 0 ? `SWEEP DETECTED — ${smc.sweeps[0].type.toUpperCase()} sweep ${smc.sweeps[0].barsAgo} bars ago → +12 confidence if aligns with trade direction.` : "No sweep — check OB/FVG carefully."}
-STEP 6 — Candle: Is there a strength-2+ reversal pattern at the level? ${patterns.length > 0 ? `YES: ${patternStr}` : "NO — reduce confidence by 15 if issuing a signal."}
-STEP 7 — RR: Can TP2 reach at least 1:3.0 at the next structural level (PDH=${daily?.pdHigh?.toFixed(d) ?? "N/A"}, PDL=${daily?.pdLow?.toFixed(d) ?? "N/A"}, weekly H/L)? If RR < 3.0 → NO TRADE.
-STEP 8 — Final verdict: Signal only if steps 1-7 all pass. Elite setup (A+) = sweep + aligned OB + candle + RSI extreme → confidence 90+. Standard (A) = OB + candle + session → confidence 83-89. When any doubt exists → NO TRADE.`
+=== RECENT OHLCV (last 15 H1 bars) ===
+${ohlcv}`
 }
 
-// ── JSON extraction helper ─────────────────────────────────────
+// ── JSON extraction ────────────────────────────────────────────
 
-function extractJSON(text: string): SignalResult {
+function extractResult(text: string): AIResult {
   const match = text.match(/\{[\s\S]*\}/)
-  if (!match) throw new Error("No JSON found in response")
-  const obj = JSON.parse(match[0])
-  // Normalize: ensure confluences array exists
+  if (!match) throw new Error("No JSON found in AI response")
+  let obj: Record<string, unknown>
+  try {
+    obj = JSON.parse(match[0])
+  } catch {
+    throw new Error(`AI returned invalid JSON: ${match[0].slice(0, 120)}`)
+  }
+
+  // Normalize old format (side: "BUY"/"SELL"/"NO TRADE") to new status format
+  if (!obj.status) {
+    if (obj.side === "NO TRADE" || obj.side === "NO_TRADE") {
+      obj.status = "NO_TRADE"
+    } else if (obj.side === "BUY" || obj.side === "SELL") {
+      obj.status = "TRADE"
+    } else {
+      obj.status = "NO_TRADE"
+    }
+  }
+
   if (!Array.isArray(obj.confluences)) obj.confluences = []
-  // Map "reasoning" alt key
   if (!obj.reasoning && obj.reason) obj.reasoning = obj.reason
-  return obj as SignalResult
+
+  return obj as unknown as AIResult
 }
 
 // ── Provider Calls ─────────────────────────────────────────────
 
-async function callAnthropic(r: AnalyzeRequest): Promise<SignalResult> {
+async function callAnthropic(r: AnalyzeRequest): Promise<AIResult> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-api-key": r.apiKey,
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": "prompt-caching-2024-07-31",
     },
     body: JSON.stringify({
       model: r.model,
-      max_tokens: 600,
-      system: SYSTEM_PROMPT,
+      max_tokens: 800,
+      system: [
+        { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+      ],
       messages: [{ role: "user", content: buildPrompt(r) }],
     }),
   })
   if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`)
   const data = await res.json()
-  return extractJSON(data.content[0].text)
+
+  const usage = data.usage ?? {}
+  const cacheRead    = usage.cache_read_input_tokens    ?? 0
+  const cacheCreated = usage.cache_creation_input_tokens ?? 0
+  const hit = cacheRead > 0
+
+  const result = extractResult(data.content[0].text)
+  result._cache = { hit, savedTokens: hit ? cacheRead : cacheCreated }
+  return result
 }
 
-async function callOpenAI(r: AnalyzeRequest): Promise<SignalResult> {
+async function callOpenAI(r: AnalyzeRequest): Promise<AIResult> {
   const isReasoning = r.model.startsWith("o")
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -352,7 +504,7 @@ async function callOpenAI(r: AnalyzeRequest): Promise<SignalResult> {
     body: JSON.stringify({
       model: r.model,
       ...(isReasoning ? {} : { temperature: 0.2 }),
-      max_completion_tokens: 600,
+      max_completion_tokens: 800,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user",   content: buildPrompt(r) },
@@ -361,17 +513,17 @@ async function callOpenAI(r: AnalyzeRequest): Promise<SignalResult> {
   })
   if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await res.text()}`)
   const data = await res.json()
-  return extractJSON(data.choices[0].message.content)
+  return extractResult(data.choices[0].message.content)
 }
 
-async function callDeepSeek(r: AnalyzeRequest): Promise<SignalResult> {
+async function callDeepSeek(r: AnalyzeRequest): Promise<AIResult> {
   const res = await fetch("https://api.deepseek.com/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${r.apiKey}` },
     body: JSON.stringify({
       model: r.model,
       temperature: 0.2,
-      max_tokens: 600,
+      max_tokens: 800,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user",   content: buildPrompt(r) },
@@ -380,10 +532,10 @@ async function callDeepSeek(r: AnalyzeRequest): Promise<SignalResult> {
   })
   if (!res.ok) throw new Error(`DeepSeek ${res.status}: ${await res.text()}`)
   const data = await res.json()
-  return extractJSON(data.choices[0].message.content)
+  return extractResult(data.choices[0].message.content)
 }
 
-async function callGemini(r: AnalyzeRequest): Promise<SignalResult> {
+async function callGemini(r: AnalyzeRequest): Promise<AIResult> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${r.model}:generateContent?key=${r.apiKey}`
   const res = await fetch(url, {
     method: "POST",
@@ -391,12 +543,12 @@ async function callGemini(r: AnalyzeRequest): Promise<SignalResult> {
     body: JSON.stringify({
       system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
       contents: [{ parts: [{ text: buildPrompt(r) }] }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: 600 },
+      generationConfig: { temperature: 0.2, maxOutputTokens: 800 },
     }),
   })
   if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`)
   const data = await res.json()
-  return extractJSON(data.candidates[0].content.parts[0].text)
+  return extractResult(data.candidates[0].content.parts[0].text)
 }
 
 // ── Route Handler ──────────────────────────────────────────────
@@ -409,7 +561,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No API key provided" }, { status: 400 })
     }
 
-    let result: SignalResult
+    let result: AIResult
 
     switch (body.provider) {
       case "anthropic": result = await callAnthropic(body); break

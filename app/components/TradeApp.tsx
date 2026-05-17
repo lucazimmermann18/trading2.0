@@ -15,16 +15,19 @@ import JournalView from "./views/JournalView"
 import ReplayView from "./views/ReplayView"
 import SystemView from "./views/SystemView"
 import MTFView from "./views/MTFView"
+import IntermarketView from "./views/IntermarketView"
 import CalendarStrip from "./CalendarStrip"
-import type { Pair, HistoryEntry, ViewId, Timeframe, AuditEntry, AuditKind, SystemMetrics } from "@/app/lib/types"
+import type { Pair, HistoryEntry, ViewId, Timeframe, AuditEntry, AuditKind, SystemMetrics, WatchZone } from "@/app/lib/types"
 import {
   buildInitialState,
   activeSessions, buildMarketContext, calcRSI, calcMACD,
   buildConfluences, SIGNAL_EXPIRY_MS, buildCorrelationMatrix,
+  detectMarketRegime,
 } from "@/app/lib/market-data"
 import { fetchBars } from "@/app/lib/twelvedata"
 import { getCachedBars, getCachedBarsAnyAge, isCacheStale, setCachedBars,
-         getCachedH4Bars, getCachedH4BarsAnyAge, setCachedH4Bars } from "@/app/lib/bar-cache"
+         getCachedH4Bars, getCachedH4BarsAnyAge, setCachedH4Bars,
+         getCachedD1Bars, getCachedD1BarsAnyAge, setCachedD1Bars } from "@/app/lib/bar-cache"
 import { useAISettings } from "@/app/hooks/useAISettings"
 import { useTwelveDataWS } from "@/app/hooks/useTwelveDataWS"
 import { usePersistedState } from "@/app/hooks/usePersistedState"
@@ -32,8 +35,12 @@ import { useNotificationSettings } from "@/app/hooks/useNotificationSettings"
 import { useZoneWatcher } from "@/app/hooks/useZoneWatcher"
 import { computeZones, type WatchedZone, ZONE_RECOMPUTE_MS } from "@/app/lib/zones"
 import { useSignalLifecycle, type ResolvedSignal } from "@/app/hooks/useSignalLifecycle"
+import { useTradeManager } from "@/app/hooks/useTradeManager"
+import { useTradeReview } from "@/app/hooks/useTradeReview"
 import { loadHistory, saveHistory, patchHistoryEntry } from "@/app/lib/history-store"
 import { useEconomicCalendar } from "@/app/hooks/useEconomicCalendar"
+import { getRecentLessons } from "@/app/lib/lessons-store"
+import { useSessionGate } from "@/app/hooks/useSessionGate"
 
 
 // ── Custom pair storage ───────────────────────────────────────
@@ -64,7 +71,8 @@ export default function TradeApp() {
   const [threshold, setThreshold] = useState(82)
   const [scannerOn, setScannerOn] = useState(true)
   const persistedAppliedRef = useRef(false)
-  const [secondsLeft, setSecondsLeft] = useState(272)
+  const [secondsLeft, setSecondsLeft] = useState(300)       // tactical (5 min)
+  const [strategicSecsLeft, setStrategicSecsLeft] = useState(60) // strategic (30 min, first run sooner)
   const [scanning, setScanning] = useState(false)
   const [toast, setToast] = useState<{ pair: Pair; signal: NonNullable<Pair["signal"]> } | null>(null)
   const [resolvedToast, setResolvedToast] = useState<ResolvedSignal | null>(null)
@@ -84,6 +92,8 @@ export default function TradeApp() {
   const notifSettings = useNotificationSettings()
   const { loaded: persLoaded, state: persState, save: persSave } = usePersistedState()
   const { upcoming: calendarUpcoming, minutesUntil, getBlockingEvent } = useEconomicCalendar()
+  const [sessionClock, setSessionClock] = useState(Date.now())
+  const sessionGate = useSessionGate(sessionClock)
 
   const logEvent = useCallback((kind: AuditKind, msg: string) => {
     setAuditLog(prev => [{ id: auditIdRef.current++, time: Date.now(), kind, msg }, ...prev].slice(0, 120))
@@ -107,7 +117,21 @@ export default function TradeApp() {
         const updHistory = last && now - last.time < 60
           ? [...p.history.slice(0, -1), { ...last, close: price, high: Math.max(last.high, price), low: Math.min(last.low, price) }]
           : [...p.history.slice(-219), { time: now, open: p.px, high: Math.max(p.px, price), low: Math.min(p.px, price), close: price, volume: 0 }]
-        return { ...p, px: price, history: updHistory }
+
+        // Zone proximity: when price crosses activateAt → enter tactical mode
+        let scanPhase = p.scanPhase ?? "idle"
+        if (scanPhase === "watching" && p.watchZones?.length) {
+          const triggered = p.watchZones.some(z =>
+            z.direction === "BUY"  ? price <= z.activateAt :
+            z.direction === "SELL" ? price >= z.activateAt : false
+          )
+          if (triggered) scanPhase = "tactical"
+        }
+        // Auto-expire watch zones older than 24h
+        const validZones = (p.watchZones ?? []).filter(z => Date.now() < z.expiresAt)
+        if (validZones.length === 0 && scanPhase === "watching") scanPhase = "idle"
+
+        return { ...p, px: price, history: updHistory, scanPhase, watchZones: validZones }
       }))
     },
   })
@@ -148,9 +172,13 @@ export default function TradeApp() {
       const cached = getCachedBars(p.sym)
       if (!cached) return p
       const closes = cached.map(b => b.close)
+      const d1Cached = getCachedD1Bars(p.sym)
+      const regime = d1Cached ? detectMarketRegime(d1Cached).regime : undefined
       return {
         ...p,
         history: cached,
+        d1History: d1Cached ?? undefined,
+        regime,
         rsi: calcRSI(closes),
         macd: calcMACD(closes).macdLine,
         px: cached[cached.length - 1].close,
@@ -194,7 +222,7 @@ export default function TradeApp() {
           if (!bars.length) { logEvent("feed", `${p.sym} · no data — market may be closed`); return }
           if (!fromCache) setCachedBars(p.sym, bars)
 
-          // H4 fetch (in parallel, staggered +200ms to avoid rate limit)
+          // H4 fetch (staggered +200ms)
           const h4Bars = getCachedH4Bars(p.sym)
           if (!h4Bars) {
             setTimeout(async () => {
@@ -210,6 +238,25 @@ export default function TradeApp() {
                 }
               } catch { /* non-critical */ }
             }, 200)
+          }
+
+          // D1 fetch (staggered +400ms, 24h TTL)
+          const d1Cached = getCachedD1Bars(p.sym)
+          if (!d1Cached) {
+            setTimeout(async () => {
+              try {
+                let fetched = await fetchBars(p.sym, "D1", 120)
+                if (!fetched.length) {
+                  const stale = getCachedD1BarsAnyAge(p.sym)
+                  if (stale?.length) fetched = stale
+                }
+                if (fetched.length) {
+                  setCachedD1Bars(p.sym, fetched)
+                  const { regime } = detectMarketRegime(fetched)
+                  setPairs(prev => prev.map(q => q.id !== p.id ? q : { ...q, d1History: fetched, regime }))
+                }
+              } catch { /* non-critical */ }
+            }, 400)
           }
 
           const closes = bars.map(b => b.close)
@@ -252,186 +299,236 @@ export default function TradeApp() {
     }
   }, [persLoaded, pairs.length, persState])
 
-  // Scanner countdown — holds at 300 until all active pairs have enough history
+  // Dual countdown: tactical (5 min) + strategic (30 min)
   useEffect(() => {
+    let tick = 0
     const i = setInterval(() => {
-      setSecondsLeft(s => {
-        if (!warmupDoneRef.current) return 300  // hold during warmup
-        return scannerOn ? (s > 0 ? s - 1 : 300) : s
-      })
+      tick++
       setSessions(activeSessions())
+      if (tick % 60 === 0) setSessionClock(Date.now())  // refresh session gate every minute
+      if (!warmupDoneRef.current) {
+        setSecondsLeft(300)
+        setStrategicSecsLeft(s => s)
+        return
+      }
+      if (!scannerOn) return
+      setSecondsLeft(s => s > 0 ? s - 1 : 300)
+      setStrategicSecsLeft(s => s > 0 ? s - 1 : 1800)
     }, 1000)
     return () => clearInterval(i)
   }, [scannerOn])
 
-  const runScan = useCallback(async () => {
+  // ── Helper: build standard AI request body ───────────────────
+  const buildAIBody = useCallback((p: Pair, phase: "strategic" | "tactical", sessionLabel: string, newsCtx: { time: string; event: string; impact: string; minsUntil: number }[]) => {
     const { settings } = aiSettings
-    const useAI = settings.useAI && !!settings.apiKeys[settings.activeProvider]
-    if (!useAI) {
-      logEvent("config", "AI not configured — add an API key in Settings to enable scanning")
+    const ctx = buildMarketContext(p)
+    const lessons = getRecentLessons(p.sym, 3).map(l => ({
+      sym: l.sym, side: l.side, outcome: l.outcome,
+      pnl_r: l.pnl_r, lesson: l.lesson,
+      mistakes: l.mistakes, nextTime: l.nextTime,
+    }))
+    return {
+      body: {
+        provider: settings.activeProvider,
+        model: settings.selectedModels[settings.activeProvider],
+        apiKey: settings.apiKeys[settings.activeProvider],
+        sym: p.sym, px: p.px, digits: p.digits, spread: p.spread,
+        history: p.history.slice(-50), skillset, timeframe,
+        rsi: ctx.rsi, macdLine: ctx.macdLine, signalLine: ctx.signalLine,
+        histogram: ctx.histogram, bb: ctx.bb, trend: ctx.trend,
+        support: ctx.swings.support, resistance: ctx.swings.resistance,
+        activeSessions: ctx.activeSessions,
+        atr: ctx.atr, candlePatterns: ctx.candlePatterns, htf: ctx.htf,
+        smc: ctx.smc,
+        phase,
+        watchContext: phase === "tactical" ? p.watchZones : undefined,
+        upcomingNews: newsCtx,
+        session: sessionLabel,
+        regime: ctx.regime,
+        regimeStrength: ctx.regimeStrength,
+        d1Context: ctx.d1Context ?? undefined,
+        lessons: lessons.length ? lessons : undefined,
+      },
+      ctx,
+    }
+  }, [aiSettings, skillset, timeframe])
+
+  // ── Helper: issue a signal from AI TRADE response ─────────────
+  const issueSignal = useCallback((p: Pair, data: { side: "BUY"|"SELL"; confidence: number; entry: number; sl: number; tp1: number; tp2: number; rr?: string; reasoning?: string }, ctx: ReturnType<typeof buildMarketContext>, tag: string) => {
+    const now = Date.now()
+    const sig: NonNullable<Pair["signal"]> = {
+      side: data.side, confidence: data.confidence,
+      entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
+      rr: data.rr ?? "3.00", tf: timeframe, skillset,
+      why: tag ? `[${tag}] ${data.reasoning ?? ""}` : (data.reasoning ?? ""),
+      time: now,
+      expiresAt: now + (SIGNAL_EXPIRY_MS[timeframe] ?? SIGNAL_EXPIRY_MS.H1),
+      confluences: buildConfluences(ctx.smc, data.side),
+    }
+    setPairs(prev => prev.map(q =>
+      q.id !== p.id ? q : { ...q, status: "TRADE" as const, signal: sig, watchZones: [], scanPhase: "idle" as const, lastScan: now, confidence: sig.confidence }
+    ))
+    setToast({ pair: p, signal: sig })
+    setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 200))
+    setUnread(u => u + 1)
+    notifSettings.sendSignal({ ...sig, sym: p.sym, digits: p.digits })
+    return sig
+  }, [timeframe, skillset, notifSettings])
+
+  // ── Strategic scan: ALL active pairs, no pre-filter, AI decides ─
+  const runStrategicScan = useCallback(async () => {
+    const { settings } = aiSettings
+    if (!settings.useAI || !settings.apiKeys[settings.activeProvider]) {
+      logEvent("config", "AI not configured — add an API key in Settings")
       return
     }
+    if (!sessionGate.allowed) {
+      logEvent("config", `Strategic scan skipped — ${sessionGate.reason}`)
+      return
+    }
+    const activePairs = pairs.filter(p => p.active && p.history.length >= 50)
+    if (!activePairs.length) return
 
     setScanning(true)
-
-    // Session gate: skip scan entirely if outside London / New York hours
     const activeSess = activeSessions()
-    const sessionActive = activeSess.some(s => (s.key === "london" || s.key === "ny") && s.active)
-    if (!sessionActive) {
-      logEvent("scan", "Scan skipped — outside London/NY session (low liquidity)")
-      setScanning(false)
-      return
-    }
+    const sessionLabel = activeSess.filter(s => s.active).map(s => s.label).join("+") || "Off-hours"
 
-    const activePairs = pairs.filter(p => p.active && p.history.length >= 50)
-    if (!activePairs.length) {
-      logEvent("feed", "Scan skipped — waiting for market data to finish loading")
-      setScanning(false)
-      return
-    }
-
-    // News gate: pause scan if high-impact event within ±30 min for any active pair currency
-    const activeCurrencies = Array.from(new Set(activePairs.flatMap(p => {
+    // Pass upcoming news as context (not a gate — AI decides)
+    const currencies = Array.from(new Set(activePairs.flatMap(p => {
       const parts = p.sym.split("/")
       if (parts.length === 2) return parts
-      const map: Record<string, string> = { US100: "USD", US500: "USD", US30: "USD", GER40: "EUR", WTI: "USD", NATGAS: "USD" }
+      const map: Record<string, string> = { US100:"USD", US500:"USD", US30:"USD", GER40:"EUR", WTI:"USD", NATGAS:"USD" }
       return map[p.sym] ? [map[p.sym]] : ["USD"]
     })))
-    const blockingEvent = getBlockingEvent(activeCurrencies, 30)
-    if (blockingEvent) {
-      const minsUntil = minutesUntil(blockingEvent)
-      const when = minsUntil > 0 ? `in ${minsUntil}m` : `${Math.abs(minsUntil)}m ago`
-      logEvent("scan", `⚠ Scan paused: ${blockingEvent.currency} ${blockingEvent.event} ${when} — waiting for news to clear`)
-      setScanning(false)
-      return
-    }
+    const newsCtx = calendarUpcoming
+      .filter(e => currencies.includes(e.currency) && e.impact === "high")
+      .slice(0, 5)
+      .map(e => ({ time: e.time, event: e.event, impact: e.impact, minsUntil: minutesUntil(e) }))
 
-    logEvent("scan", `Scan started — ${activePairs.length} pairs · ${activeSess.filter(s => s.active).map(s => s.label).join("+")} session`)
+    logEvent("scan", `Strategic scan — ${activePairs.length} pairs · ${sessionLabel}${newsCtx.length ? ` · ⚠ ${newsCtx.length} news` : ""}`)
 
-    const results = new Map<number, NonNullable<Pair["signal"]> | null>()
     const latencies: number[] = []
+    let cacheHits = 0, tradeCount = 0, watchCount = 0
 
-    await Promise.allSettled(
-      activePairs.map(async p => {
-        try {
-          const ctx = buildMarketContext(p)
+    await Promise.allSettled(activePairs.map(async p => {
+      try {
+        const { body, ctx } = buildAIBody(p, "strategic", sessionLabel, newsCtx)
+        const t0 = Date.now()
+        const res = await fetch("/api/ai/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+        const lat = Date.now() - t0
+        latencies.push(lat)
+        if (!res.ok) { logEvent("ai", `${p.sym} · error ${res.status} · ${lat}ms`); return }
 
-          // Client-side pre-filter: skip if spread > 0.08% (execution slippage kills edge)
-          const spreadPct = (p.spread / p.px) * 100
-          if (spreadPct > 0.08) {
-            logEvent("scan", `${p.sym} · skipped — spread ${spreadPct.toFixed(3)}% too wide`)
-            results.set(p.id, null)
-            return
-          }
+        const data = await res.json()
+        const cached = data._cache?.hit === true
+        if (cached) cacheHits++
+        const cacheTag = cached ? " ⚡" : (data._cache ? " [c]" : "")
 
-          // Client-side pre-filter: skip if price not near any SMC level
-          const atr = ctx.atr
-          const px = p.px
-          const nearOB = ctx.smc.orderBlocks.some(ob => px >= ob.low - atr * 0.4 && px <= ob.high + atr * 0.4)
-          const nearH4OB = ctx.smc.h4OrderBlocks.some(ob => px >= ob.low - atr * 0.5 && px <= ob.high + atr * 0.5)
-          const nearFVG = ctx.smc.fvgs.some(fvg => px >= fvg.bottom - atr * 0.3 && px <= fvg.top + atr * 0.3)
-          const hasSweep = ctx.smc.sweeps.length > 0
-          if (!nearOB && !nearH4OB && !nearFVG && !hasSweep) {
-            logEvent("scan", `${p.sym} · skipped — price not near any OB/FVG/sweep`)
-            results.set(p.id, null)
-            return
-          }
-
-          const t0 = Date.now()
-          const res = await fetch("/api/ai/analyze", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              provider: settings.activeProvider,
-              model: settings.selectedModels[settings.activeProvider],
-              apiKey: settings.apiKeys[settings.activeProvider],
-              sym: p.sym, px: p.px, digits: p.digits, spread: p.spread,
-              history: p.history.slice(-50),
-              skillset, timeframe,
-              rsi: ctx.rsi, macdLine: ctx.macdLine, signalLine: ctx.signalLine,
-              histogram: ctx.histogram, bb: ctx.bb, trend: ctx.trend,
-              support: ctx.swings.support, resistance: ctx.swings.resistance,
-              activeSessions: ctx.activeSessions,
-              atr: ctx.atr, candlePatterns: ctx.candlePatterns, htf: ctx.htf,
-              smc: ctx.smc,
-            }),
-          })
-          const lat = Date.now() - t0
-          latencies.push(lat)
-          if (!res.ok) { logEvent("ai", `${p.sym} · ${settings.activeProvider} error · ${lat}ms`); results.set(p.id, null); return }
-          const data = await res.json()
-          if (data.side === "NO TRADE" || data.confidence < threshold) {
-            logEvent("ai", `${p.sym} · NO TRADE · ${data.confidence}% conf · ${lat}ms`)
-            results.set(p.id, null)
-          } else {
-            logEvent("signal", `${p.sym} ${data.side} · conf ${data.confidence}% · ${lat}ms`)
-            const now = Date.now()
-            results.set(p.id, {
-              side: data.side, confidence: data.confidence,
-              entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
-              rr: data.rr ?? "3.00", tf: timeframe, skillset,
-              why: data.reasoning, time: now,
-              expiresAt: now + (SIGNAL_EXPIRY_MS[timeframe] ?? SIGNAL_EXPIRY_MS.H1),
-              confluences: buildConfluences(ctx.smc, data.side),
+        if (data.status === "TRADE" && data.side && data.confidence >= threshold) {
+          tradeCount++
+          logEvent("signal", `${p.sym} ${data.side} · conf ${data.confidence}% · ${lat}ms${cacheTag}`)
+          issueSignal(p, data, ctx, "")
+          // Correlation check
+          const others = activePairs.filter(q => q.id !== p.id && q.status === "TRADE")
+          if (others.length > 0) {
+            const matrix = buildCorrelationMatrix(pairs)
+            others.forEach(q => {
+              const rowA = matrix.find(r => r.sym === p.sym)
+              const idxB = matrix.findIndex(r => r.sym === q.sym)
+              if (rowA && idxB !== -1 && Math.abs(rowA.row[idxB]) > 0.7)
+                logEvent("signal", `⚠ Correlation: ${p.sym} & ${q.sym} (${(rowA.row[idxB]*100).toFixed(0)}%) — consider sizing down`)
             })
           }
-        } catch {
-          results.set(p.id, null)
+
+        } else if (data.status === "WATCH" && Array.isArray(data.watchZones) && data.watchZones.length > 0) {
+          watchCount++
+          const now = Date.now()
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const zones: WatchZone[] = data.watchZones.slice(0, 2).map((z: any, i: number) => ({
+            id: `${p.id}-${now}-${i}`,
+            direction: z.direction as "BUY" | "SELL",
+            zoneTop: z.zoneTop, zoneBottom: z.zoneBottom, activateAt: z.activateAt,
+            reason: z.reason ?? "", invalidateIf: z.invalidateIf ?? "",
+            createdAt: now, expiresAt: now + 24 * 60 * 60 * 1000,
+          }))
+          const desc = zones.map(z => `${z.direction} ${z.zoneBottom.toFixed(p.digits)}–${z.zoneTop.toFixed(p.digits)}`).join(", ")
+          logEvent("zone", `${p.sym} · watching ${desc} · ${lat}ms${cacheTag}`)
+          setPairs(prev => prev.map(q =>
+            q.id !== p.id ? q : { ...q, status: "NO TRADE" as const, signal: null, watchZones: zones, scanPhase: "watching" as const, lastScan: now, confidence: 0 }
+          ))
+
+        } else {
+          logEvent("ai", `${p.sym} · NO TRADE · ${lat}ms${cacheTag}`)
+          setPairs(prev => prev.map(q =>
+            q.id !== p.id ? q : { ...q, status: "NO TRADE" as const, signal: null, watchZones: [], scanPhase: "idle" as const, lastScan: Date.now(), confidence: 0 }
+          ))
         }
-      })
-    )
-
-    const avgLat = latencies.length ? Math.round(latencies.reduce((s, v) => s + v, 0) / latencies.length) : 0
-    let sigCount = 0
-
-    // Collect signals and detect correlated pairs firing simultaneously
-    const signalPairs: Array<{ p: Pair; sig: NonNullable<Pair["signal"]> }> = []
-    for (const [pairId, sig] of Array.from(results)) {
-      if (!sig) continue
-      sigCount++
-      const p = activePairs.find(ap => ap.id === pairId)!
-      signalPairs.push({ p, sig })
-      setToast({ pair: p, signal: sig })
-      setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig, state: "ACTIVE" as const }, ...h].slice(0, 200))
-      setUnread(u => u + 1)
-      notifSettings.sendSignal({ ...sig, sym: p.sym, digits: p.digits })
-    }
-
-    // Correlation warning: warn when 2+ signals share highly correlated pairs
-    if (signalPairs.length >= 2) {
-      const matrix = buildCorrelationMatrix(pairs)
-      const warned = new Set<string>()
-      for (let i = 0; i < signalPairs.length; i++) {
-        for (let j = i + 1; j < signalPairs.length; j++) {
-          const symA = signalPairs[i].p.sym
-          const symB = signalPairs[j].p.sym
-          const key = [symA, symB].sort().join("|")
-          if (warned.has(key)) continue
-          const rowA = matrix.find(r => r.sym === symA)
-          const idxB = matrix.findIndex(r => r.sym === symB)
-          if (rowA && idxB !== -1 && Math.abs(rowA.row[idxB]) > 0.7) {
-            warned.add(key)
-            logEvent("signal", `⚠ Correlation warning: ${symA} & ${symB} are highly correlated (${(rowA.row[idxB] * 100).toFixed(0)}%) — consider sizing down`)
-          }
-        }
+      } catch {
+        logEvent("ai", `${p.sym} · exception in strategic scan`)
       }
-    }
-
-    setPairs(prev => prev.map(p => {
-      if (!p.active) return p
-      const sig = results.get(p.id)
-      if (sig) return { ...p, status: "TRADE" as const, signal: sig, lastScan: Date.now(), confidence: sig.confidence }
-      return { ...p, status: "NO TRADE" as const, signal: null, lastScan: Date.now(), confidence: 0, reasoning: "No high-probability setup — monitoring for next opportunity." }
     }))
 
-    logEvent("scan", `Scan complete — ${sigCount} signal${sigCount !== 1 ? "s" : ""} · avg ${avgLat}ms`)
-    setMetrics(prev => ({ ...prev, scanCount: prev.scanCount + 1, signalCount: prev.signalCount + sigCount, lastAILatency: avgLat }))
+    const avgLat = latencies.length ? Math.round(latencies.reduce((s,v)=>s+v,0)/latencies.length) : 0
+    const apiCalls = latencies.length
+    const cacheRate = apiCalls > 0 ? Math.round((cacheHits/apiCalls)*100) : 0
+    const cacheSuffix = apiCalls > 0 && settings.activeProvider === "anthropic" ? ` · ⚡ ${cacheHits}/${apiCalls} (${cacheRate}%)` : ""
+    logEvent("scan", `Strategic done — ${tradeCount} signals · ${watchCount} watching · avg ${avgLat}ms${cacheSuffix}`)
+    setMetrics(prev => ({ ...prev, scanCount: prev.scanCount + 1, signalCount: prev.signalCount + tradeCount, lastAILatency: avgLat }))
     setScanning(false)
-  }, [skillset, threshold, timeframe, pairs, aiSettings, notifSettings, logEvent])
+  }, [pairs, aiSettings, skillset, threshold, timeframe, logEvent, calendarUpcoming, minutesUntil, buildAIBody, issueSignal, sessionGate])
+
+  // ── Tactical scan: ONLY pairs near their watch zones ──────────
+  const runTacticalScan = useCallback(async () => {
+    const { settings } = aiSettings
+    if (!settings.useAI || !settings.apiKeys[settings.activeProvider]) return
+    if (!sessionGate.allowed) return  // silently skip — strategic already logged the reason
+    const tacticalPairs = pairs.filter(p => p.active && p.scanPhase === "tactical" && p.history.length >= 50)
+    if (!tacticalPairs.length) return
+
+    setScanning(true)
+    const activeSess = activeSessions()
+    const sessionLabel = activeSess.filter(s => s.active).map(s => s.label).join("+") || "Off-hours"
+    logEvent("zone", `Tactical scan — ${tacticalPairs.length} pair${tacticalPairs.length > 1 ? "s" : ""} near zone`)
+
+    await Promise.allSettled(tacticalPairs.map(async p => {
+      try {
+        const { body, ctx } = buildAIBody(p, "tactical", sessionLabel, [])
+        const t0 = Date.now()
+        const res = await fetch("/api/ai/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+        const lat = Date.now() - t0
+        if (!res.ok) { logEvent("ai", `${p.sym} · tactical error ${res.status}`); return }
+
+        const data = await res.json()
+        const cached = data._cache?.hit === true
+        const cacheTag = cached ? " ⚡" : ""
+
+        if (data.status === "TRADE" && data.side && data.confidence >= threshold) {
+          logEvent("signal", `${p.sym} ${data.side} · conf ${data.confidence}% [zone entry] · ${lat}ms${cacheTag}`)
+          setMetrics(prev => ({ ...prev, signalCount: prev.signalCount + 1, lastAILatency: lat }))
+          issueSignal(p, data, ctx, "Zone Entry")
+        } else {
+          // Setup not ready or invalidated — stay watching
+          logEvent("zone", `${p.sym} · zone not confirmed — watching · ${lat}ms${cacheTag}`)
+          setPairs(prev => prev.map(q =>
+            q.id !== p.id ? q : { ...q, scanPhase: "watching" as const }
+          ))
+        }
+      } catch {
+        logEvent("ai", `${p.sym} · exception in tactical scan`)
+      }
+    }))
+
+    setScanning(false)
+  }, [pairs, aiSettings, skillset, threshold, timeframe, logEvent, buildAIBody, issueSignal, sessionGate])
+
+  // Strategic fires every 30 min; tactical fires every 5 min (only if pairs waiting)
+  useEffect(() => {
+    if (strategicSecsLeft === 0 && scannerOn) runStrategicScan()
+  }, [strategicSecsLeft, scannerOn, runStrategicScan])
 
   useEffect(() => {
-    if (secondsLeft === 0 && scannerOn) runScan()
-  }, [secondsLeft, scannerOn, runScan])
+    if (secondsLeft === 0 && scannerOn) runTacticalScan()
+  }, [secondsLeft, scannerOn, runTacticalScan])
 
   // ── Zone system ──────────────────────────────────────────────
 
@@ -448,77 +545,59 @@ export default function TradeApp() {
   // Single-pair analysis triggered by zone entry or manual trigger
   const runPairScan = useCallback(async (p: Pair, triggerLabel: string) => {
     const { settings } = aiSettings
-    const useAI = settings.useAI && !!settings.apiKeys[settings.activeProvider]
-    const isManual = triggerLabel === "Manual"
-
-    if (!useAI) {
+    if (!settings.useAI || !settings.apiKeys[settings.activeProvider]) {
       logEvent("config", `${p.sym} · AI not configured — add an API key in Settings`)
       return
     }
-
     if (p.history.length < 50) {
       logEvent("feed", `${p.sym} · skipped — market data still loading (${p.history.length} bars)`)
       return
     }
 
+    const isManual = triggerLabel === "Manual"
     logEvent(isManual ? "scan" : "zone", isManual ? `Manual analysis — ${p.sym}` : `Zone entry: ${p.sym} → ${triggerLabel}`)
 
-    let sig: NonNullable<Pair["signal"]> | null = null
-
     try {
-      const ctx = buildMarketContext(p)
+      const activeSess = activeSessions()
+      const sessionLabel = activeSess.filter(s => s.active).map(s => s.label).join("+") || "Off-hours"
+      const { body, ctx } = buildAIBody(p, isManual ? "strategic" : "tactical", sessionLabel, [])
       const t0 = Date.now()
-      const res = await fetch("/api/ai/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider: settings.activeProvider,
-          model: settings.selectedModels[settings.activeProvider],
-          apiKey: settings.apiKeys[settings.activeProvider],
-          sym: p.sym, px: p.px, digits: p.digits, spread: p.spread,
-          history: p.history.slice(-50), skillset, timeframe,
-          rsi: ctx.rsi, macdLine: ctx.macdLine, signalLine: ctx.signalLine,
-          histogram: ctx.histogram, bb: ctx.bb, trend: ctx.trend,
-          support: ctx.swings.support, resistance: ctx.swings.resistance,
-          activeSessions: ctx.activeSessions,
-          atr: ctx.atr, candlePatterns: ctx.candlePatterns, htf: ctx.htf,
-          smc: ctx.smc,
-        }),
-      })
+      const res = await fetch("/api/ai/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
       const lat = Date.now() - t0
-      if (res.ok) {
-        const data = await res.json()
-        logEvent("ai", `${p.sym} · ${settings.activeProvider} · ${lat}ms`)
-        setMetrics(prev => ({ ...prev, lastAILatency: lat }))
-        if (data.side !== "NO TRADE" && data.confidence >= threshold) {
-          const now = Date.now()
-          sig = {
-            side: data.side, confidence: data.confidence,
-            entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
-            rr: data.rr ?? "3.00", tf: timeframe, skillset,
-            why: `[${triggerLabel}] ${data.reasoning}`, time: now,
-            expiresAt: now + (SIGNAL_EXPIRY_MS[timeframe] ?? SIGNAL_EXPIRY_MS.H1),
-            confluences: buildConfluences(ctx.smc, data.side),
-          }
-        }
+      if (!res.ok) { logEvent("ai", `${p.sym} · error ${res.status} · ${lat}ms`); return }
+
+      const data = await res.json()
+      logEvent("ai", `${p.sym} · ${settings.activeProvider} · ${lat}ms`)
+      setMetrics(prev => ({ ...prev, lastAILatency: lat }))
+
+      // Normalize old format (data.side) and new format (data.status)
+      const status: string = data.status ?? (data.side && data.side !== "NO TRADE" ? "TRADE" : "NO_TRADE")
+
+      if (status === "TRADE" && (data.side === "BUY" || data.side === "SELL") && data.confidence >= threshold) {
+        logEvent("signal", `${p.sym} ${data.side} · conf ${data.confidence}% [${triggerLabel}]`)
+        setMetrics(prev => ({ ...prev, signalCount: prev.signalCount + 1 }))
+        issueSignal(p, data, ctx, triggerLabel)
+      } else if (status === "WATCH" && Array.isArray(data.watchZones) && data.watchZones.length > 0) {
+        const now = Date.now()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const newZones: WatchZone[] = data.watchZones.slice(0, 2).map((z: any, i: number) => ({
+          id: `${p.id}-${now}-${i}`,
+          direction: z.direction as "BUY" | "SELL",
+          zoneTop: z.zoneTop, zoneBottom: z.zoneBottom, activateAt: z.activateAt,
+          reason: z.reason ?? "", invalidateIf: z.invalidateIf ?? "",
+          createdAt: now, expiresAt: now + 24 * 60 * 60 * 1000,
+        }))
+        logEvent("zone", `${p.sym} · watching ${newZones.map(z => `${z.direction} zone`).join(", ")}`)
+        setPairs(prev => prev.map(q =>
+          q.id !== p.id ? q : { ...q, status: "NO TRADE" as const, signal: null, watchZones: newZones, scanPhase: "watching" as const, lastScan: now }
+        ))
+      } else {
+        logEvent("scan", `${p.sym} · NO TRADE`)
       }
-    } catch { /* silent */ }
-
-    if (!sig) {
-      logEvent("scan", `${p.sym} · NO TRADE`)
-      return
+    } catch {
+      logEvent("ai", `${p.sym} · exception in manual scan`)
     }
-
-    logEvent("signal", `${p.sym} ${sig.side} · conf ${sig.confidence}%`)
-    setMetrics(prev => ({ ...prev, signalCount: prev.signalCount + 1 }))
-    setPairs(prev => prev.map(q =>
-      q.id !== p.id ? q : { ...q, status: "TRADE" as const, signal: sig!, lastScan: Date.now(), confidence: sig!.confidence }
-    ))
-    setToast({ pair: p, signal: sig })
-    setHistory(h => [{ sym: p.sym, digits: p.digits, ...sig!, state: "ACTIVE" as const }, ...h].slice(0, 200))
-    setUnread(u => u + 1)
-    notifSettings.sendSignal({ ...sig, sym: p.sym, digits: p.digits })
-  }, [aiSettings, skillset, timeframe, threshold, notifSettings, logEvent])
+  }, [aiSettings, threshold, logEvent, buildAIBody, issueSignal])
 
   useZoneWatcher({
     pairs: pairs.filter(p => p.active),
@@ -530,6 +609,14 @@ export default function TradeApp() {
   })
 
   // ── Signal Lifecycle — auto-resolve TP1 / TP2 / SL ──────────
+  const { reviewTrade } = useTradeReview({
+    pairs,
+    aiSettings: aiSettings.settings,
+    onLesson: useCallback((lesson: import("@/app/lib/types").TradeLesson) => {
+      logEvent("ai", `${lesson.sym} · trade reviewed · ${lesson.outcome} ${lesson.pnl_r > 0 ? "+" : ""}${lesson.pnl_r.toFixed(2)}R · lesson stored`)
+    }, [logEvent]),
+  })
+
   useSignalLifecycle({
     pairs,
     history,
@@ -539,13 +626,11 @@ export default function TradeApp() {
       setResolvedToast(resolved)
       const { entry, newState, pnl_r } = resolved
       const pnlStr = `${pnl_r > 0 ? "+" : ""}${pnl_r.toFixed(2)}R`
-      if (newState === "TP1") logEvent("tp", `${entry.sym} TP1 hit · ${pnlStr}`)
+      if (newState === "TP1") logEvent("tp", `${entry.sym} TP1 hit · ${pnlStr} · SL → breakeven`)
       else if (newState === "TP2") logEvent("tp", `${entry.sym} TP2 hit · ${pnlStr} (full target)`)
       else if (newState === "EXPIRED") logEvent("scan", `${entry.sym} signal expired — setup no longer valid`)
       else logEvent("sl", `${entry.sym} stop loss hit · ${pnlStr}`)
-      // Patch the persisted entry immediately so a page reload shows the resolved state
       patchHistoryEntry(entry.sym, entry.time, { state: newState, pnl_r })
-      // Push lifecycle update to Telegram/Discord
       notifSettings.sendLifecycleUpdate({
         sym: entry.sym, side: entry.side, state: newState,
         pnl_r, entry: entry.entry, digits: entry.digits,
@@ -555,6 +640,16 @@ export default function TradeApp() {
         tpCount: newState !== "SL" && newState !== "EXPIRED" ? prev.tpCount + 1 : prev.tpCount,
         slCount: newState === "SL" ? prev.slCount + 1 : prev.slCount,
       }))
+      // Trigger async AI review (fire-and-forget)
+      reviewTrade(resolved)
+    }, [logEvent, reviewTrade]),
+  })
+
+  // Active trade management: move SL to breakeven on TP1, trail to TP1 on halfway to TP2
+  useTradeManager({
+    pairs, history, setPairs, setHistory,
+    onBreakevenMove: useCallback((sym: string, newSL: number) => {
+      logEvent("tp", `${sym} · SL moved to ${newSL.toFixed(5)} (breakeven/trail)`)
     }, [logEvent]),
   })
 
@@ -700,12 +795,16 @@ export default function TradeApp() {
           onSelect={id => { setSelectedId(id); if (isFullView) setView("dashboard") }}
           onToggleActive={onToggleActive}
           secondsLeft={secondsLeft}
+          strategicSecsLeft={strategicSecsLeft}
           scanning={scanning}
           scannerOn={scannerOn}
           zones={zones}
           warmupDone={warmupDone}
           barsReady={barsReadyCount}
           totalActive={activePairsList.length}
+          sessionAllowed={sessionGate.allowed}
+          sessionReason={sessionGate.reason}
+          currentSessions={sessionGate.currentSessions}
         />
 
         {/* Main content area */}
@@ -734,6 +833,7 @@ export default function TradeApp() {
             setHistory(prev => prev.map(h => h.sym === sym && h.time === time ? { ...h, notes } : h))
           }} />}
         {view === "mtf"          && <MTFView pairs={pairs} selectedId={selectedId} onSelectPair={handleOpenPair} />}
+        {view === "intermarket"  && <IntermarketView />}
         {view === "replay"       && <ReplayView history={history} pairs={pairs} />}
         {view === "system" && (
           <SystemView

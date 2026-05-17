@@ -1,4 +1,4 @@
-import type { Pair, OHLCBar, Signal, Session, HistoryEntry, ConfluenceItem } from "./types"
+import type { Pair, OHLCBar, Signal, Session, HistoryEntry, ConfluenceItem, MarketRegime } from "./types"
 import { buildSMCContext, type SMCContext } from "./smc"
 
 // How long a signal stays valid per timeframe
@@ -170,6 +170,99 @@ export interface MarketContext {
   candlePatterns: CandlePattern[]
   htf: HigherTFContext
   smc: SMCContext
+  regime: MarketRegime
+  regimeStrength: number
+  d1Context: D1Context | null
+}
+
+// ── Market Regime Detection ────────────────────────────────────
+
+export function detectMarketRegime(bars: OHLCBar[]): { regime: MarketRegime; strength: number } {
+  if (bars.length < 30) return { regime: "ranging", strength: 50 }
+  const recent = bars.slice(-60)
+  const closes = recent.map(b => b.close)
+
+  const ema20 = calcEMA(closes, 20)
+  const ema50 = calcEMA(closes, Math.min(50, closes.length))
+  const lastE20 = ema20[ema20.length - 1]
+  const lastE50 = ema50[ema50.length - 1]
+  const px = closes[closes.length - 1]
+
+  // Swing structure: last 4 swing highs and lows
+  const swingHighs: number[] = []
+  const swingLows: number[] = []
+  for (let i = 2; i < recent.length - 2; i++) {
+    if (recent[i].high > recent[i-1].high && recent[i].high > recent[i-2].high &&
+        recent[i].high > recent[i+1].high && recent[i].high > recent[i+2].high)
+      swingHighs.push(recent[i].high)
+    if (recent[i].low < recent[i-1].low && recent[i].low < recent[i-2].low &&
+        recent[i].low < recent[i+1].low && recent[i].low < recent[i+2].low)
+      swingLows.push(recent[i].low)
+  }
+
+  const lastHighs = swingHighs.slice(-4)
+  const lastLows  = swingLows.slice(-4)
+  const hhCount = lastHighs.filter((h, i) => i === 0 || h > lastHighs[i-1]).length
+  const hlCount = lastLows.filter((l, i) => i === 0 || l > lastLows[i-1]).length
+  const lhCount = lastHighs.filter((h, i) => i === 0 || h < lastHighs[i-1]).length
+  const llCount = lastLows.filter((l, i) => i === 0 || l < lastLows[i-1]).length
+
+  // ATR vs directional move (choppy = ATR high but price going nowhere)
+  const atr = calcATR(recent)
+  const netMove = Math.abs(closes[closes.length-1] - closes[0])
+  const atrSum  = atr * recent.length
+  const choppiness = atrSum > 0 ? 1 - (netMove / atrSum) : 0.5
+
+  const emaUp   = lastE20 > lastE50 && px > lastE20
+  const emaDown = lastE20 < lastE50 && px < lastE20
+  const isUpTrend   = emaUp   && hhCount >= 2 && hlCount >= 2
+  const isDownTrend = emaDown && lhCount >= 2 && llCount >= 2
+  const isChoppy = choppiness > 0.72 && !isUpTrend && !isDownTrend
+
+  if (isUpTrend)   return { regime: "trending_up",   strength: Math.min(95, 65 + hhCount * 6 + hlCount * 5) }
+  if (isDownTrend) return { regime: "trending_down",  strength: Math.min(95, 65 + lhCount * 6 + llCount * 5) }
+  if (isChoppy)    return { regime: "choppy",         strength: Math.round(choppiness * 100) }
+  return               { regime: "ranging",         strength: 60 }
+}
+
+// ── D1 Context Builder ─────────────────────────────────────────
+
+export interface D1Context {
+  trend: "UP" | "DOWN" | "NEUTRAL"
+  rsi: number
+  regime: MarketRegime
+  support: number[]
+  resistance: number[]
+  lastClose: number
+  lastBarBullish: boolean
+  // Multi-week structure
+  weekHigh: number
+  weekLow: number
+  monthHigh: number
+  monthLow: number
+}
+
+export function buildD1Context(d1Bars: OHLCBar[]): D1Context | null {
+  if (d1Bars.length < 10) return null
+  const closes = d1Bars.map(b => b.close)
+  const last = d1Bars[d1Bars.length - 1]
+  const swings = calcSwingLevels(d1Bars, 3)
+  const { regime } = detectMarketRegime(d1Bars)
+  const week  = d1Bars.slice(-5)
+  const month = d1Bars.slice(-21)
+  return {
+    trend:          calcTrend(closes),
+    rsi:            calcRSI(closes),
+    regime,
+    support:        swings.support.slice(0, 3),
+    resistance:     swings.resistance.slice(0, 3),
+    lastClose:      last.close,
+    lastBarBullish: last.close >= last.open,
+    weekHigh:  Math.max(...week.map(b => b.high)),
+    weekLow:   Math.min(...week.map(b => b.low)),
+    monthHigh: Math.max(...month.map(b => b.high)),
+    monthLow:  Math.min(...month.map(b => b.low)),
+  }
 }
 
 // ── ATR (Wilder's) ─────────────────────────────────────────────
@@ -316,7 +409,9 @@ export function buildMarketContext(p: Pair): MarketContext {
   const candlePatterns = detectCandlePatterns(p.history.slice(-5))
   const htf    = buildHigherTFContext(p.history)
   const smc    = buildSMCContext(p.history, p.px, p.h4History)
-  return { rsi, macdLine, signalLine, histogram, bb, trend, swings, activeSessions: sessions, atr, candlePatterns, htf, smc }
+  const { regime, strength: regimeStrength } = detectMarketRegime(p.history)
+  const d1Context = p.d1History ? buildD1Context(p.d1History) : null
+  return { rsi, macdLine, signalLine, histogram, bb, trend, swings, activeSessions: sessions, atr, candlePatterns, htf, smc, regime, regimeStrength, d1Context }
 }
 
 export function buildInitialState(): Pair[] {

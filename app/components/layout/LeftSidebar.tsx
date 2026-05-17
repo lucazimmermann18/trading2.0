@@ -11,23 +11,46 @@ interface Props {
   onSelect: (id: number) => void
   onToggleActive: (id: number) => void
   secondsLeft: number
+  strategicSecsLeft: number
   scanning: boolean
   scannerOn: boolean
   zones: WatchedZone[]
   warmupDone: boolean
   barsReady: number
   totalActive: number
+  sessionAllowed: boolean
+  sessionReason: string
+  currentSessions: string[]
+}
+
+function TimerRing({
+  seconds, max, color, size = 44,
+}: { seconds: number; max: number; color: string; size?: number }) {
+  const r = size / 2 - 4
+  const circ = 2 * Math.PI * r
+  const pct = Math.max(0, Math.min(1, (max - seconds) / max))
+  const mm = String(Math.floor(seconds / 60)).padStart(2, "0")
+  const ss = String(seconds % 60).padStart(2, "0")
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <svg viewBox={`0 0 ${size} ${size}`} className="w-full h-full -rotate-90">
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="2.5"/>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="2.5"
+          strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={circ * (1 - pct)} />
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center text-[9px] num font-semibold" style={{ color }}>
+        {mm}:{ss}
+      </div>
+    </div>
+  )
 }
 
 function ScanTimer({
-  secondsLeft, scanning, warmupDone, barsReady, totalActive,
+  secondsLeft, strategicSecsLeft, scanning, warmupDone, barsReady, totalActive, tacticalCount,
 }: {
-  secondsLeft: number; scanning: boolean
-  warmupDone: boolean; barsReady: number; totalActive: number
+  secondsLeft: number; strategicSecsLeft: number; scanning: boolean
+  warmupDone: boolean; barsReady: number; totalActive: number; tacticalCount: number
 }) {
-  const mm = String(Math.floor(secondsLeft / 60)).padStart(2, "0")
-  const ss = String(secondsLeft % 60).padStart(2, "0")
-  const pct = ((300 - secondsLeft) / 300) * 100
   const warmupPct = totalActive > 0 ? (barsReady / totalActive) * 100 : 0
 
   if (!warmupDone) {
@@ -36,13 +59,10 @@ function ScanTimer({
         <div className="relative w-12 h-12 shrink-0">
           <svg viewBox="0 0 50 50" className="w-full h-full -rotate-90">
             <circle cx="25" cy="25" r="20" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3"/>
-            <circle
-              cx="25" cy="25" r="20" fill="none"
-              stroke="#f59e0b" strokeWidth="3" strokeLinecap="round"
+            <circle cx="25" cy="25" r="20" fill="none" stroke="#f59e0b" strokeWidth="3" strokeLinecap="round"
               strokeDasharray={`${2 * Math.PI * 20}`}
               strokeDashoffset={`${2 * Math.PI * 20 * (1 - warmupPct / 100)}`}
-              className="transition-all duration-700"
-            />
+              className="transition-all duration-700" />
           </svg>
           <div className="absolute inset-0 flex items-center justify-center text-[10px] num text-amber-400 font-semibold">
             {barsReady}/{totalActive}
@@ -58,29 +78,35 @@ function ScanTimer({
   }
 
   return (
-    <div className="flex items-center gap-3 px-3 py-3 glass rounded-lg">
-      <div className="relative w-12 h-12 shrink-0">
-        <svg viewBox="0 0 50 50" className="w-full h-full -rotate-90">
-          <circle cx="25" cy="25" r="20" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3"/>
-          <circle
-            cx="25" cy="25" r="20" fill="none"
-            stroke="#00d4ff" strokeWidth="3" strokeLinecap="round"
-            strokeDasharray={`${2 * Math.PI * 20}`}
-            strokeDashoffset={`${2 * Math.PI * 20 * (1 - pct / 100)}`}
-          />
-        </svg>
-        <div className="absolute inset-0 flex items-center justify-center text-[10px] num text-white font-semibold">
-          {mm}:{ss}
+    <div className="glass rounded-lg px-3 py-2.5 space-y-2">
+      {/* Strategic scan row */}
+      <div className="flex items-center gap-2.5">
+        <TimerRing seconds={strategicSecsLeft} max={1800} color="#7c6dfa" size={40} />
+        <div className="min-w-0 flex-1">
+          <div className="text-[9px] tracking-[0.16em] text-mute uppercase">Strategic</div>
+          <div className="text-[11px] font-medium text-white leading-tight">
+            {scanning ? "Scanning all pairs…" : `All pairs · 30 min`}
+          </div>
         </div>
+        {scanning && <span className="w-1.5 h-1.5 rounded-full bg-accent-blue animate-pulse shrink-0" />}
       </div>
-      <div className="min-w-0">
-        <div className="text-[10px] tracking-[0.16em] text-mute uppercase">
-          {scanning ? "Scanning…" : "Next AI Scan"}
+
+      {/* Tactical scan row */}
+      <div className="flex items-center gap-2.5">
+        <TimerRing seconds={secondsLeft} max={300} color="#00d4ff" size={40} />
+        <div className="min-w-0 flex-1">
+          <div className="text-[9px] tracking-[0.16em] text-mute uppercase">Tactical</div>
+          <div className="text-[11px] font-medium text-white leading-tight">
+            {tacticalCount > 0
+              ? <span className="text-accent-blue">{tacticalCount} near zone</span>
+              : "Watching zones · 5 min"}
+          </div>
         </div>
-        <div className="text-[12px] font-medium text-white">
-          {scanning ? "Analyzing pairs" : `In ${mm}:${ss}`}
-        </div>
-        <div className="text-[10px] text-mute mt-0.5">5-min interval · 24/7</div>
+        {tacticalCount > 0 && (
+          <span className="px-1.5 h-4 rounded-full bg-accent-blue/20 text-accent-blue text-[9px] font-bold flex items-center shrink-0">
+            {tacticalCount}
+          </span>
+        )}
       </div>
     </div>
   )
@@ -138,6 +164,19 @@ function PairRow({
             </div>
             <div className="text-[10px] num text-mute">conf {p.signal?.confidence}%</div>
           </>
+        ) : p.scanPhase === "tactical" ? (
+          <div className="flex items-center gap-1.5 px-2 h-5 rounded-[4px] text-[10px] font-bold tracking-[0.14em] bg-accent-blue/15 text-accent-blue whitespace-nowrap">
+            <span className="w-1.5 h-1.5 rounded-full bg-accent-blue animate-pulse inline-block"/>
+            ZONE ENTRY
+          </div>
+        ) : p.scanPhase === "watching" ? (
+          <div
+            className="flex items-center gap-1.5 px-2 h-5 rounded-[4px] text-[10px] font-semibold tracking-[0.14em] bg-violet-500/10 text-violet-400 whitespace-nowrap"
+            title={p.watchZones?.map(z => `${z.direction} ${z.zoneBottom.toFixed(p.digits)}–${z.zoneTop.toFixed(p.digits)}`).join(" | ")}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-violet-400 inline-block"/>
+            WATCHING
+          </div>
         ) : (
           <div className="px-2 h-5 rounded-[4px] text-[10px] font-bold tracking-[0.18em] bg-white/[0.04] text-mute flex items-center whitespace-nowrap">
             NO TRADE
@@ -171,10 +210,12 @@ function PairRow({
   )
 }
 
-export default function LeftSidebar({ pairs, selectedId, onSelect, onToggleActive, secondsLeft, scanning, scannerOn, zones, warmupDone, barsReady, totalActive }: Props) {
+export default function LeftSidebar({ pairs, selectedId, onSelect, onToggleActive, secondsLeft, strategicSecsLeft, scanning, scannerOn, zones, warmupDone, barsReady, totalActive, sessionAllowed, sessionReason, currentSessions }: Props) {
   const [search, setSearch] = useState("")
   const activeCount = pairs.filter(p => p.active).length
   const tradeCount = pairs.filter(p => p.status === "TRADE").length
+  const watchingCount = pairs.filter(p => p.active && p.scanPhase === "watching").length
+  const tacticalCount = pairs.filter(p => p.active && p.scanPhase === "tactical").length
   const filtered = pairs.filter(p =>
     p.sym.toLowerCase().includes(search.toLowerCase()) ||
     p.group.toLowerCase().includes(search.toLowerCase())
@@ -194,11 +235,23 @@ export default function LeftSidebar({ pairs, selectedId, onSelect, onToggleActiv
         <div className="mt-1.5 flex items-baseline gap-2">
           <div className="text-[22px] num font-semibold text-white leading-none">{activeCount}</div>
           <div className="text-[10px] text-mute">/ {pairs.length} scanned</div>
-          {tradeCount > 0 && (
-            <div className="ml-auto text-[10px] num text-accent-green flex items-center gap-1">
-              ⚡ {tradeCount} signal{tradeCount > 1 ? "s" : ""}
-            </div>
-          )}
+          <div className="ml-auto flex items-center gap-1.5">
+            {tradeCount > 0 && (
+              <div className="text-[10px] num text-accent-green flex items-center gap-1">
+                ⚡ {tradeCount}
+              </div>
+            )}
+            {watchingCount > 0 && (
+              <div className="text-[10px] num text-violet-400 flex items-center gap-1" title={`${watchingCount} pair${watchingCount > 1 ? "s" : ""} watching zones`}>
+                👁 {watchingCount}
+              </div>
+            )}
+            {tacticalCount > 0 && (
+              <div className="text-[10px] num text-accent-blue flex items-center gap-1 animate-pulse" title={`${tacticalCount} pair${tacticalCount > 1 ? "s" : ""} near zone entry`}>
+                ⚡ {tacticalCount}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -232,9 +285,42 @@ export default function LeftSidebar({ pairs, selectedId, onSelect, onToggleActiv
       </div>
 
       {/* Scanner timer */}
-      <div className="p-3 border-t hairline">
-        <ScanTimer secondsLeft={secondsLeft} scanning={scanning} warmupDone={warmupDone} barsReady={barsReady} totalActive={totalActive} />
-        <div className="mt-2 flex items-center justify-between px-1">
+      <div className="p-3 border-t hairline space-y-2">
+        <ScanTimer
+          secondsLeft={secondsLeft}
+          strategicSecsLeft={strategicSecsLeft}
+          scanning={scanning}
+          warmupDone={warmupDone}
+          barsReady={barsReady}
+          totalActive={totalActive}
+          tacticalCount={tacticalCount}
+        />
+
+        {/* Session gate status */}
+        <div className={`px-2.5 py-2 rounded-md flex items-center gap-2 text-[10px]
+          ${sessionAllowed
+            ? "bg-accent-green/[0.07] border border-accent-green/20"
+            : "bg-amber-500/[0.07] border border-amber-500/20"}`}>
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${sessionAllowed ? "bg-accent-green" : "bg-amber-400 animate-pulse"}`} />
+          <div className="min-w-0">
+            {sessionAllowed ? (
+              <span className="text-accent-green font-semibold tracking-wide">
+                TRADING ACTIVE
+                {currentSessions.length > 0 && (
+                  <span className="font-normal text-accent-green/70 ml-1">
+                    · {currentSessions.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join("/")}
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span className="text-amber-400 font-semibold tracking-wide truncate block" title={sessionReason}>
+                BLOCKED · {sessionReason || "Session disabled"}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between px-1">
           <div className="text-[10px] text-mute tracking-[0.12em] uppercase">AI Scanner</div>
           <div className={`text-[10px] font-bold tracking-[0.16em] ${scannerOn ? "text-accent-green" : "text-mute"}`}>
             {scannerOn ? "● ACTIVE" : "○ PAUSED"}
