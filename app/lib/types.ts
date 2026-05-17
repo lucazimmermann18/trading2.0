@@ -1,3 +1,15 @@
+export interface WatchZone {
+  id: string
+  direction: "BUY" | "SELL"
+  zoneTop: number
+  zoneBottom: number
+  activateAt: number     // price level that triggers tactical mode
+  reason: string
+  invalidateIf: string
+  createdAt: number
+  expiresAt: number
+}
+
 export interface Pair {
   id: number
   sym: string
@@ -17,6 +29,8 @@ export interface Pair {
   confidence: number
   rsi: number
   macd: number
+  watchZones?: WatchZone[]
+  scanPhase?: "idle" | "watching" | "tactical"
 }
 
 export interface OHLCBar {
