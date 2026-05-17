@@ -22,10 +22,12 @@ import {
   buildInitialState,
   activeSessions, buildMarketContext, calcRSI, calcMACD,
   buildConfluences, SIGNAL_EXPIRY_MS, buildCorrelationMatrix,
+  detectMarketRegime,
 } from "@/app/lib/market-data"
 import { fetchBars } from "@/app/lib/twelvedata"
 import { getCachedBars, getCachedBarsAnyAge, isCacheStale, setCachedBars,
-         getCachedH4Bars, getCachedH4BarsAnyAge, setCachedH4Bars } from "@/app/lib/bar-cache"
+         getCachedH4Bars, getCachedH4BarsAnyAge, setCachedH4Bars,
+         getCachedD1Bars, getCachedD1BarsAnyAge, setCachedD1Bars } from "@/app/lib/bar-cache"
 import { useAISettings } from "@/app/hooks/useAISettings"
 import { useTwelveDataWS } from "@/app/hooks/useTwelveDataWS"
 import { usePersistedState } from "@/app/hooks/usePersistedState"
@@ -33,8 +35,11 @@ import { useNotificationSettings } from "@/app/hooks/useNotificationSettings"
 import { useZoneWatcher } from "@/app/hooks/useZoneWatcher"
 import { computeZones, type WatchedZone, ZONE_RECOMPUTE_MS } from "@/app/lib/zones"
 import { useSignalLifecycle, type ResolvedSignal } from "@/app/hooks/useSignalLifecycle"
+import { useTradeManager } from "@/app/hooks/useTradeManager"
+import { useTradeReview } from "@/app/hooks/useTradeReview"
 import { loadHistory, saveHistory, patchHistoryEntry } from "@/app/lib/history-store"
 import { useEconomicCalendar } from "@/app/hooks/useEconomicCalendar"
+import { getRecentLessons } from "@/app/lib/lessons-store"
 
 
 // ── Custom pair storage ───────────────────────────────────────
@@ -164,9 +169,13 @@ export default function TradeApp() {
       const cached = getCachedBars(p.sym)
       if (!cached) return p
       const closes = cached.map(b => b.close)
+      const d1Cached = getCachedD1Bars(p.sym)
+      const regime = d1Cached ? detectMarketRegime(d1Cached).regime : undefined
       return {
         ...p,
         history: cached,
+        d1History: d1Cached ?? undefined,
+        regime,
         rsi: calcRSI(closes),
         macd: calcMACD(closes).macdLine,
         px: cached[cached.length - 1].close,
@@ -210,7 +219,7 @@ export default function TradeApp() {
           if (!bars.length) { logEvent("feed", `${p.sym} · no data — market may be closed`); return }
           if (!fromCache) setCachedBars(p.sym, bars)
 
-          // H4 fetch (in parallel, staggered +200ms to avoid rate limit)
+          // H4 fetch (staggered +200ms)
           const h4Bars = getCachedH4Bars(p.sym)
           if (!h4Bars) {
             setTimeout(async () => {
@@ -226,6 +235,25 @@ export default function TradeApp() {
                 }
               } catch { /* non-critical */ }
             }, 200)
+          }
+
+          // D1 fetch (staggered +400ms, 24h TTL)
+          const d1Cached = getCachedD1Bars(p.sym)
+          if (!d1Cached) {
+            setTimeout(async () => {
+              try {
+                let fetched = await fetchBars(p.sym, "D1", 120)
+                if (!fetched.length) {
+                  const stale = getCachedD1BarsAnyAge(p.sym)
+                  if (stale?.length) fetched = stale
+                }
+                if (fetched.length) {
+                  setCachedD1Bars(p.sym, fetched)
+                  const { regime } = detectMarketRegime(fetched)
+                  setPairs(prev => prev.map(q => q.id !== p.id ? q : { ...q, d1History: fetched, regime }))
+                }
+              } catch { /* non-critical */ }
+            }, 400)
           }
 
           const closes = bars.map(b => b.close)
@@ -288,6 +316,11 @@ export default function TradeApp() {
   const buildAIBody = useCallback((p: Pair, phase: "strategic" | "tactical", sessionLabel: string, newsCtx: { time: string; event: string; impact: string; minsUntil: number }[]) => {
     const { settings } = aiSettings
     const ctx = buildMarketContext(p)
+    const lessons = getRecentLessons(p.sym, 3).map(l => ({
+      sym: l.sym, side: l.side, outcome: l.outcome,
+      pnl_r: l.pnl_r, lesson: l.lesson,
+      mistakes: l.mistakes, nextTime: l.nextTime,
+    }))
     return {
       body: {
         provider: settings.activeProvider,
@@ -305,6 +338,10 @@ export default function TradeApp() {
         watchContext: phase === "tactical" ? p.watchZones : undefined,
         upcomingNews: newsCtx,
         session: sessionLabel,
+        regime: ctx.regime,
+        regimeStrength: ctx.regimeStrength,
+        d1Context: ctx.d1Context ?? undefined,
+        lessons: lessons.length ? lessons : undefined,
       },
       ctx,
     }
@@ -562,6 +599,14 @@ export default function TradeApp() {
   })
 
   // ── Signal Lifecycle — auto-resolve TP1 / TP2 / SL ──────────
+  const { reviewTrade } = useTradeReview({
+    pairs,
+    aiSettings: aiSettings.settings,
+    onLesson: useCallback((lesson: import("@/app/lib/types").TradeLesson) => {
+      logEvent("ai", `${lesson.sym} · trade reviewed · ${lesson.outcome} ${lesson.pnl_r > 0 ? "+" : ""}${lesson.pnl_r.toFixed(2)}R · lesson stored`)
+    }, [logEvent]),
+  })
+
   useSignalLifecycle({
     pairs,
     history,
@@ -571,13 +616,11 @@ export default function TradeApp() {
       setResolvedToast(resolved)
       const { entry, newState, pnl_r } = resolved
       const pnlStr = `${pnl_r > 0 ? "+" : ""}${pnl_r.toFixed(2)}R`
-      if (newState === "TP1") logEvent("tp", `${entry.sym} TP1 hit · ${pnlStr}`)
+      if (newState === "TP1") logEvent("tp", `${entry.sym} TP1 hit · ${pnlStr} · SL → breakeven`)
       else if (newState === "TP2") logEvent("tp", `${entry.sym} TP2 hit · ${pnlStr} (full target)`)
       else if (newState === "EXPIRED") logEvent("scan", `${entry.sym} signal expired — setup no longer valid`)
       else logEvent("sl", `${entry.sym} stop loss hit · ${pnlStr}`)
-      // Patch the persisted entry immediately so a page reload shows the resolved state
       patchHistoryEntry(entry.sym, entry.time, { state: newState, pnl_r })
-      // Push lifecycle update to Telegram/Discord
       notifSettings.sendLifecycleUpdate({
         sym: entry.sym, side: entry.side, state: newState,
         pnl_r, entry: entry.entry, digits: entry.digits,
@@ -587,6 +630,16 @@ export default function TradeApp() {
         tpCount: newState !== "SL" && newState !== "EXPIRED" ? prev.tpCount + 1 : prev.tpCount,
         slCount: newState === "SL" ? prev.slCount + 1 : prev.slCount,
       }))
+      // Trigger async AI review (fire-and-forget)
+      reviewTrade(resolved)
+    }, [logEvent, reviewTrade]),
+  })
+
+  // Active trade management: move SL to breakeven on TP1, trail to TP1 on halfway to TP2
+  useTradeManager({
+    pairs, history, setPairs,
+    onBreakevenMove: useCallback((sym: string, newSL: number) => {
+      logEvent("tp", `${sym} · SL moved to ${newSL.toFixed(5)} (breakeven/trail)`)
     }, [logEvent]),
   })
 

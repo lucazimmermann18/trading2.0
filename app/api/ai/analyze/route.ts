@@ -36,6 +36,30 @@ interface SMCData {
   daily: SMCDaily
 }
 
+interface D1ContextData {
+  trend: "UP" | "DOWN" | "NEUTRAL"
+  rsi: number
+  regime: string
+  support: number[]
+  resistance: number[]
+  lastClose: number
+  lastBarBullish: boolean
+  weekHigh: number
+  weekLow: number
+  monthHigh: number
+  monthLow: number
+}
+
+interface TradeLessonSummary {
+  sym: string
+  side: "BUY" | "SELL"
+  outcome: string
+  pnl_r: number
+  lesson: string
+  mistakes: string[]
+  nextTime: string
+}
+
 interface WatchZoneInput {
   direction: "BUY" | "SELL"
   zoneTop: number
@@ -84,6 +108,11 @@ interface AnalyzeRequest {
   watchContext?: WatchZoneInput[]   // populated in tactical phase
   upcomingNews?: UpcomingNews[]
   session?: string
+  // AI autonomy enhancements
+  regime?: string
+  regimeStrength?: number
+  d1Context?: D1ContextData
+  lessons?: TradeLessonSummary[]
 }
 
 interface WatchZoneResult {
@@ -177,11 +206,30 @@ Define zones where the price action has NOT yet developed but institutional inte
 - Liquidity pool that is likely to be targeted before reversal
 - activateAt: the price level just BEFORE the zone (for BUY: slightly above zoneTop; for SELL: slightly below zoneBottom) — this triggers re-analysis
 
+### MARKET REGIME ADAPTATION
+You will receive a detected market regime. Adapt your strategy accordingly:
+- trending_up / trending_down (strength ≥ 70): Favor continuation setups. Breakouts from consolidation zones are valid. OBs in the trend direction carry higher weight. Counter-trend setups need A+ confluences.
+- ranging (strength 50-69): Favor OB-to-OB fades. Only trade from extreme ends of the range. TP2 = opposite range boundary. Be cautious of false breakouts.
+- choppy (strength ≥ 70): Output NO_TRADE or conservative WATCH zones only. Choppy conditions destroy edge. The only valid entry is after a confirmed BOS from the chop.
+
+### D1 MULTI-TIMEFRAME TOP-DOWN PROCESS (mandatory)
+Always analyze top-down: D1 → H4 → H1. You will receive actual D1 bar context.
+Step 1 (D1): Establish the macro bias. D1 trend = the "law". Only trade with D1 trend, or wait for D1 structure shift.
+Step 2 (H4): Find the setup location. H4 OBs and FVGs are the primary entry zones.
+Step 3 (H1): Time the exact entry. H1 confirmation (BOS, sweep, pattern) is the trigger.
+If any two timeframes conflict, reduce confidence by 15 points. If all three conflict, output NO_TRADE.
+
 ### QUALITY GATES (informational — factor into confidence, do not hard-block)
 - Session: London (07-17 UTC) and NY (13-22 UTC) produce highest-quality setups. Off-hours reduces quality.
 - News: High-impact events within 60 min = reduce confidence significantly or output NO_TRADE.
 - Spread: > 0.08% of price = significantly reduces edge, factor into confidence.
 - Trend conflict: D1 opposing H4/H1 = reduce confidence or wait for resolution.
+
+### LEARNING FROM PAST TRADES
+You will receive lessons from recent completed trades on this instrument. Use them to:
+- Avoid repeating documented mistakes
+- Recognize patterns that previously worked or failed
+- Adjust confidence if the same setup context led to a loss recently
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ## OUTPUT FORMATS — strict JSON only, no markdown
@@ -296,21 +344,49 @@ ${r.watchContext.map(z =>
 Your task: Is there a valid entry trigger NOW (candle pattern, fresh BOS, sweep at zone)? → TRADE or NO_TRADE.`
     : ""
 
+  // Market regime string
+  const regimeLabel = r.regime
+    ? `${r.regime.replace("_", " ").toUpperCase()} (strength ${r.regimeStrength ?? "?"}%)`
+    : "Unknown"
+
+  // D1 context block
+  const d1Block = r.d1Context ? `
+=== D1 MACRO CONTEXT (top-down step 1) ===
+D1 Trend:   ${r.d1Context.trend} | D1 Regime: ${r.d1Context.regime.replace("_", " ").toUpperCase()}
+D1 RSI:     ${r.d1Context.rsi.toFixed(1)} | Last D1 bar: ${r.d1Context.lastBarBullish ? "BULLISH" : "BEARISH"} close at ${r.d1Context.lastClose.toFixed(d)}
+Week Range: ${r.d1Context.weekLow.toFixed(d)} – ${r.d1Context.weekHigh.toFixed(d)}
+Month Range:${r.d1Context.monthLow.toFixed(d)} – ${r.d1Context.monthHigh.toFixed(d)}
+D1 Support:    ${r.d1Context.support.length ? r.d1Context.support.map(l => l.toFixed(d)).join(" | ") : "None"}
+D1 Resistance: ${r.d1Context.resistance.length ? r.d1Context.resistance.map(l => l.toFixed(d)).join(" | ") : "None"}`
+    : "\n=== D1 MACRO CONTEXT ===\nNo D1 data available — rely on SMC daily context."
+
+  // Lessons block
+  const lessonsBlock = r.lessons?.length
+    ? `\n=== LESSONS FROM RECENT TRADES ON ${r.sym} ===
+${r.lessons.map((l, i) => `[${i+1}] ${l.outcome} (${l.pnl_r > 0 ? "+" : ""}${l.pnl_r.toFixed(2)}R) ${l.side}
+  Lesson: ${l.lesson}
+  Mistakes: ${l.mistakes.join("; ") || "None"}
+  Next time: ${l.nextTime}`).join("\n")}`
+    : ""
+
   return `=== PHASE: ${r.phase === "tactical" ? "TACTICAL CONFIRMATION" : "STRATEGIC ANALYSIS"} ===
 ${r.phase === "strategic"
   ? "Perform full analysis. Identify an immediate setup (TRADE), zones to monitor (WATCH), or output NO_TRADE."
   : "Price reached a flagged zone. Confirm or reject the setup."}
 ${tacticalBlock}
+${lessonsBlock}
 
 === INSTRUMENT ===
 Symbol:   ${r.sym}
 Price:    ${r.px.toFixed(d)}
 Spread:   ${r.spread} (${spreadPct}% of price)
 Strategy: ${r.skillset}
+Regime:   ${regimeLabel}
 
 === SESSION & NEWS CONTEXT (factor into confidence) ===
 Session:  ${sessionStr}
 Upcoming: ${newsStr}
+${d1Block}
 
 === DAILY CONTEXT ===
 D1 Bias:      ${daily?.d1Bias ?? "N/A"}

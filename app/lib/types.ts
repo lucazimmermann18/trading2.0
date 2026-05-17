@@ -10,6 +10,8 @@ export interface WatchZone {
   expiresAt: number
 }
 
+export type MarketRegime = "trending_up" | "trending_down" | "ranging" | "choppy"
+
 export interface Pair {
   id: number
   sym: string
@@ -25,12 +27,27 @@ export interface Pair {
   lastScan: number
   history: OHLCBar[]
   h4History?: OHLCBar[]
+  d1History?: OHLCBar[]
+  regime?: MarketRegime
   reasoning: string
   confidence: number
   rsi: number
   macd: number
   watchZones?: WatchZone[]
   scanPhase?: "idle" | "watching" | "tactical"
+}
+
+export interface TradeLesson {
+  id: string
+  sym: string
+  side: "BUY" | "SELL"
+  outcome: "TP2" | "TP1" | "SL" | "EXPIRED"
+  pnl_r: number
+  time: number
+  lesson: string
+  strengths: string[]
+  mistakes: string[]
+  nextTime: string
 }
 
 export interface OHLCBar {
