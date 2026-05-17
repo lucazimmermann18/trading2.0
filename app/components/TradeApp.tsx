@@ -786,8 +786,8 @@ export default function TradeApp() {
           <div className="flex items-center gap-2">
             <span className={`w-1.5 h-1.5 rounded-full ${wsBanner === "disconnected" ? "bg-amber-400 animate-pulse" : "bg-accent-green"}`}/>
             {wsBanner === "disconnected"
-              ? "⚠ WebSocket disconnected — reconnecting automatically…"
-              : "✓ WebSocket reconnected — live prices restored"}
+              ? <>⚠ WS disconnected<span className="hidden sm:inline"> — reconnecting automatically…</span></>
+              : <>✓ WS reconnected<span className="hidden sm:inline"> — live prices restored</span></>}
           </div>
           {wsBanner === "disconnected" && (
             <button onClick={() => setWsBanner(null)} className="text-amber-400/60 hover:text-amber-400 transition">✕</button>

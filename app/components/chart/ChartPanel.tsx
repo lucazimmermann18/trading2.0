@@ -663,7 +663,7 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
   ]
 
   return (
-    <div className={`flex-1 flex flex-col panel border-t-0 border-b-0 m-2 rounded-xl overflow-hidden relative ${trade ? "animate-glowBorder" : ""}`}>
+    <div className={`flex-1 flex flex-col panel border-t-0 border-b-0 m-0 md:m-2 rounded-none md:rounded-xl overflow-hidden relative ${trade ? "animate-glowBorder" : ""}`}>
       {/* Toolbar */}
       <div className="h-12 flex items-center px-3 md:px-4 border-b hairline gap-2 md:gap-3 shrink-0 overflow-hidden">
         <div className="flex items-center gap-2">

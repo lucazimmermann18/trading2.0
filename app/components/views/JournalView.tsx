@@ -107,38 +107,42 @@ export default function JournalView({ history, onOpen, onUpdateNote }: Props) {
   return (
     <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
       {/* Header */}
-      <div className="flex items-end justify-between px-6 pt-5 pb-4 border-b hairline shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-md bg-accent-blue/10 text-accent-blue flex items-center justify-center">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M4 4h12l4 4v12H4z"/><path d="M8 8h8M8 12h8M8 16h5"/>
-            </svg>
-          </div>
-          <div>
-            <div className="text-[18px] font-semibold text-white tracking-tight">Signal Journal</div>
-            <div className="text-[11px] text-mute mt-0.5">
-              {history.length} signals · {active} active · {wins}W / {losses}L
+      <div className="border-b hairline shrink-0">
+        {/* Title row */}
+        <div className="flex items-center justify-between px-4 md:px-6 pt-4 md:pt-5 pb-3">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-md bg-accent-blue/10 text-accent-blue flex items-center justify-center shrink-0">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M4 4h12l4 4v12H4z"/><path d="M8 8h8M8 12h8M8 16h5"/>
+              </svg>
+            </div>
+            <div>
+              <div className="text-[16px] md:text-[18px] font-semibold text-white tracking-tight">Signal Journal</div>
+              <div className="text-[11px] text-mute mt-0.5">
+                {history.length} signals · {active} active · {wins}W / {losses}L
+              </div>
             </div>
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* export csv */}
+          {/* Export — icon-only on mobile */}
           <button
             onClick={downloadCSV}
-            className="h-9 px-3 rounded-md border border-white/10 text-[11px] text-white hover:bg-white/[0.04] transition flex items-center gap-1.5"
+            className="h-9 px-3 rounded-md border border-white/10 text-[11px] text-white hover:bg-white/[0.04] transition flex items-center gap-1.5 shrink-0"
           >
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
               <polyline points="7 10 12 15 17 10"/>
               <line x1="12" y1="15" x2="12" y2="3"/>
             </svg>
-            Export CSV
+            <span className="hidden md:inline">Export CSV</span>
           </button>
+        </div>
+        {/* Controls row — horizontally scrollable on mobile */}
+        <div className="flex items-center gap-2 px-3 md:px-6 pb-3 overflow-x-auto scrollbar-none">
           {/* filter tabs */}
-          <div className="flex items-center gap-1 px-1 py-1 rounded-md glass">
+          <div className="flex items-center gap-1 px-1 py-1 rounded-md glass shrink-0">
             {FILTERS.map(f => (
               <button key={f.k} onClick={() => setFilter(f.k)}
-                className={`h-7 px-3 rounded-[5px] text-[11px] font-medium transition
+                className={`h-7 px-2.5 md:px-3 rounded-[5px] text-[11px] font-medium transition whitespace-nowrap
                   ${filter === f.k ? "bg-white/[0.08] text-white" : "text-mute hover:text-white"}`}>
                 {f.label}
               </button>
@@ -148,22 +152,22 @@ export default function JournalView({ history, onOpen, onUpdateNote }: Props) {
           <select
             value={sort}
             onChange={e => setSort(e.target.value as typeof sort)}
-            className="h-9 px-3 rounded-md glass bg-transparent text-[11px] text-white outline-none border border-white/[0.06] cursor-pointer"
+            className="h-9 px-2.5 md:px-3 rounded-md glass bg-ink-900 text-[11px] text-white outline-none border border-white/[0.06] cursor-pointer shrink-0"
           >
             <option value="time" className="bg-[#0a0e1a]">Sort: Time</option>
-            <option value="conf" className="bg-[#0a0e1a]">Sort: Confidence</option>
+            <option value="conf" className="bg-[#0a0e1a]">Sort: Conf</option>
             <option value="pnl"  className="bg-[#0a0e1a]">Sort: P&L</option>
           </select>
           {/* search */}
-          <div className="h-9 flex items-center gap-2 px-2.5 rounded-md glass border border-white/[0.06]">
+          <div className="h-9 flex items-center gap-2 px-2.5 rounded-md glass border border-white/[0.06] min-w-[140px] md:min-w-0">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-mute shrink-0">
               <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
             </svg>
             <input
               value={q}
               onChange={e => setQ(e.target.value)}
-              placeholder="Filter symbol / strategy…"
-              className="bg-transparent outline-none text-[11.5px] placeholder:text-mute text-white w-[180px]"
+              placeholder="Search…"
+              className="bg-transparent outline-none text-[11.5px] placeholder:text-mute text-white w-full md:w-[180px]"
             />
           </div>
         </div>
@@ -171,6 +175,45 @@ export default function JournalView({ history, onOpen, onUpdateNote }: Props) {
 
       {/* Table */}
       <div className="flex-1 overflow-y-auto min-h-0">
+        {/* Mobile card list */}
+        <div className="md:hidden space-y-2 p-3">
+          {filtered.map((s, i) => {
+            const pnl = s.pnl_r
+            const pnlColor = pnl == null ? "#5a6779" : pnl > 0 ? "#00ff88" : "#ff3d5a"
+            return (
+              <div
+                key={s.id ?? i}
+                onClick={() => onOpen?.(s)}
+                className="panel rounded-lg px-3 py-3 cursor-pointer hover:bg-white/[0.025] transition border border-white/[0.06]"
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[13px] font-semibold text-white">{s.sym}</span>
+                    <span className={`text-[10px] font-bold tracking-[0.14em] ${s.side === "BUY" ? "text-accent-green" : "text-accent-red"}`}>
+                      {s.side}
+                    </span>
+                    <LifecycleBadge state={s.state} />
+                  </div>
+                  <span className="num font-bold text-[14px]" style={{ color: pnlColor }}>
+                    {pnl == null ? "Open" : `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}R`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 text-[10px] text-mute num">
+                  <span>{new Date(s.time).toLocaleDateString(undefined, { month: "short", day: "2-digit" })}</span>
+                  <span>{s.tf}</span>
+                  <ConfidencePill v={s.confidence} />
+                  <span>1:{s.rr}</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        {filtered.length === 0 && (
+          <div className="md:hidden flex flex-col items-center justify-center py-16 gap-3 text-mute">
+            <div className="text-[13px]">No signals match the filter</div>
+          </div>
+        )}
+        <div className="hidden md:block">
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-mute">
             <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="1" opacity="0.3">
@@ -233,6 +276,7 @@ export default function JournalView({ history, onOpen, onUpdateNote }: Props) {
             </tbody>
           </table>
         )}
+        </div>
       </div>
 
       {/* Footer summary */}

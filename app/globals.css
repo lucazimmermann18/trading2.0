@@ -76,6 +76,16 @@ button { touch-action: manipulation; }
     border: none;
     box-shadow: 0 0 8px rgba(0,212,255,0.5);
   }
+  @media (max-width: 767px) {
+    .slider::-webkit-slider-thumb {
+      width: 22px;
+      height: 22px;
+    }
+    .slider::-moz-range-thumb {
+      width: 22px;
+      height: 22px;
+    }
+  }
 }
 
 /* ===== Safe-area helpers ===== */

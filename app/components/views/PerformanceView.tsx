@@ -7,7 +7,7 @@ interface Props { history: HistoryEntry[] }
 
 function PageHeader({ title, sub, right }: { title: string; sub?: string; right?: React.ReactNode }) {
   return (
-    <div className="flex items-end justify-between px-6 pt-5 pb-4 border-b hairline shrink-0">
+    <div className="flex items-end justify-between px-4 md:px-6 pt-4 md:pt-5 pb-3 md:pb-4 border-b hairline shrink-0">
       <div className="flex items-center gap-3">
         <div className="w-9 h-9 rounded-md bg-accent-blue/10 text-accent-blue flex items-center justify-center">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -164,9 +164,9 @@ export default function PerformanceView({ history }: Props) {
           </div>
         }
       />
-      <div className="flex-1 overflow-y-auto p-6 space-y-5 min-h-0">
+      <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-5 min-h-0">
         {/* KPI row */}
-        <div className="grid grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <StatCard label="Win Rate"
             value={`${(perf.winRate * 100).toFixed(1)}%`}
             sub={`${perf.wins} W / ${perf.losses} L`}
@@ -198,7 +198,7 @@ export default function PerformanceView({ history }: Props) {
         </div>
 
         {/* Splits */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
           <div className="panel rounded-lg p-4">
             <div className="text-[11px] tracking-[0.18em] uppercase text-mute mb-3">By Strategy</div>
             <SplitBars rows={perf.bySkillset} />
