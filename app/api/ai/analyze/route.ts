@@ -75,6 +75,7 @@ interface SignalResult {
   rr: string
   confluences: string[]
   reasoning: string
+  _cache?: { hit: boolean; savedTokens: number }
 }
 
 // ── System Prompt ──────────────────────────────────────────────
@@ -331,17 +332,35 @@ async function callAnthropic(r: AnalyzeRequest): Promise<SignalResult> {
       "Content-Type": "application/json",
       "x-api-key": r.apiKey,
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": "prompt-caching-2024-07-31",
     },
     body: JSON.stringify({
       model: r.model,
       max_tokens: 600,
-      system: SYSTEM_PROMPT,
+      // System prompt as array with cache_control — Anthropic caches this block
+      // for ~5 min (ephemeral). All parallel pair scans within that window reuse
+      // the cached tokens, cutting input cost by ~80% and latency by ~200ms.
+      system: [
+        {
+          type: "text",
+          text: SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
       messages: [{ role: "user", content: buildPrompt(r) }],
     }),
   })
   if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`)
   const data = await res.json()
-  return extractJSON(data.content[0].text)
+
+  const usage = data.usage ?? {}
+  const cacheRead    = usage.cache_read_input_tokens    ?? 0
+  const cacheCreated = usage.cache_creation_input_tokens ?? 0
+  const hit = cacheRead > 0
+
+  const result = extractJSON(data.content[0].text)
+  result._cache = { hit, savedTokens: hit ? cacheRead : cacheCreated }
+  return result
 }
 
 async function callOpenAI(r: AnalyzeRequest): Promise<SignalResult> {

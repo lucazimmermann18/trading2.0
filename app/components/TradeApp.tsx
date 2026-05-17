@@ -311,6 +311,7 @@ export default function TradeApp() {
 
     const results = new Map<number, NonNullable<Pair["signal"]> | null>()
     const latencies: number[] = []
+    let cacheHits = 0
 
     await Promise.allSettled(
       activePairs.map(async p => {
@@ -361,11 +362,14 @@ export default function TradeApp() {
           latencies.push(lat)
           if (!res.ok) { logEvent("ai", `${p.sym} · ${settings.activeProvider} error · ${lat}ms`); results.set(p.id, null); return }
           const data = await res.json()
+          const cached = data._cache?.hit === true
+          if (cached) cacheHits++
+          const cacheTag = cached ? " ⚡" : (data._cache ? " [priming]" : "")
           if (data.side === "NO TRADE" || data.confidence < threshold) {
-            logEvent("ai", `${p.sym} · NO TRADE · ${data.confidence}% conf · ${lat}ms`)
+            logEvent("ai", `${p.sym} · NO TRADE · ${data.confidence}% conf · ${lat}ms${cacheTag}`)
             results.set(p.id, null)
           } else {
-            logEvent("signal", `${p.sym} ${data.side} · conf ${data.confidence}% · ${lat}ms`)
+            logEvent("signal", `${p.sym} ${data.side} · conf ${data.confidence}% · ${lat}ms${cacheTag}`)
             const now = Date.now()
             results.set(p.id, {
               side: data.side, confidence: data.confidence,
@@ -425,7 +429,12 @@ export default function TradeApp() {
       return { ...p, status: "NO TRADE" as const, signal: null, lastScan: Date.now(), confidence: 0, reasoning: "No high-probability setup — monitoring for next opportunity." }
     }))
 
-    logEvent("scan", `Scan complete — ${sigCount} signal${sigCount !== 1 ? "s" : ""} · avg ${avgLat}ms`)
+    const apiCalls = latencies.length
+    const cacheRate = apiCalls > 0 ? Math.round((cacheHits / apiCalls) * 100) : 0
+    const cacheSuffix = apiCalls > 0 && settings.activeProvider === "anthropic"
+      ? ` · ⚡ ${cacheHits}/${apiCalls} cache hits (${cacheRate}%)`
+      : ""
+    logEvent("scan", `Scan complete — ${sigCount} signal${sigCount !== 1 ? "s" : ""} · avg ${avgLat}ms${cacheSuffix}`)
     setMetrics(prev => ({ ...prev, scanCount: prev.scanCount + 1, signalCount: prev.signalCount + sigCount, lastAILatency: avgLat }))
     setScanning(false)
   }, [skillset, threshold, timeframe, pairs, aiSettings, notifSettings, logEvent])
