@@ -1,4 +1,5 @@
 "use client"
+import { useRouter } from "next/navigation"
 import type { Session } from "@/app/lib/types"
 
 interface Props {
@@ -11,6 +12,13 @@ interface Props {
 }
 
 export default function TopNav({ scannerOn, setScannerOn, notifications, sessions, onOpenSettings, wsConnected }: Props) {
+  const router = useRouter()
+
+  const handleLogout = async () => {
+    await fetch("/api/auth/logout", { method: "POST" })
+    router.push("/login")
+    router.refresh()
+  }
   return (
     <div className="h-[52px] md:h-[60px] flex items-center px-3 md:px-5 panel border-l-0 border-r-0 border-t-0 shrink-0">
       {/* Brand */}
@@ -109,11 +117,17 @@ export default function TopNav({ scannerOn, setScannerOn, notifications, session
           </svg>
         </button>
 
-        <div className="hidden md:flex w-9 h-9 rounded-md btn-ghost items-center justify-center text-mute">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>
+        <button
+          onClick={handleLogout}
+          title="Abmelden"
+          className="hidden md:flex w-9 h-9 rounded-md btn-ghost items-center justify-center text-mute hover:text-accent-red transition"
+        >
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+            <polyline points="16 17 21 12 16 7"/>
+            <line x1="21" y1="12" x2="9" y2="12"/>
           </svg>
-        </div>
+        </button>
       </div>
     </div>
   )
