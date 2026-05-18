@@ -1,7 +1,7 @@
 "use client"
 import { useState, useRef } from "react"
 import type { Pair } from "@/app/lib/types"
-import { SKILLSETS, fmt } from "@/app/lib/market-data"
+import { fmt } from "@/app/lib/market-data"
 import { PROVIDERS, BADGE_COLORS, type ProviderKey } from "@/app/lib/ai-providers"
 import type { useAISettings } from "@/app/hooks/useAISettings"
 import type { useNotificationSettings } from "@/app/hooks/useNotificationSettings"
@@ -16,8 +16,6 @@ interface Props {
   onTogglePair: (id: number) => void
   onAddPair: (sym: string, group: string) => void
   onRemovePair: (id: number) => void
-  skillset: string
-  setSkillset: (s: string) => void
   threshold: number
   setThreshold: (n: number) => void
   aiSettings: AISettingsHook
@@ -27,7 +25,7 @@ interface Props {
 const TABS = [
   { k: "ai-models", label: "AI Models",        icon: "M" },
   { k: "pairs",     label: "Pairs & Markets",  icon: "P" },
-  { k: "strategy",  label: "AI Strategy",      icon: "S" },
+  { k: "strategy",  label: "Scanner",           icon: "S" },
   { k: "notif",     label: "Notifications",    icon: "N" },
   { k: "apis",      label: "API Connections",  icon: "C" },
   { k: "schedule",  label: "Schedule",         icon: "T" },
@@ -471,28 +469,23 @@ function PairsTab({ pairs, onTogglePair, onAddPair, onRemovePair }: {
 
 /* ── Strategy Tab ──────────────────────────────────────────── */
 function StrategyTab({
-  skillset, setSkillset, threshold, setThreshold,
+  threshold, setThreshold,
 }: {
-  skillset: string; setSkillset: (s: string) => void; threshold: number; setThreshold: (n: number) => void
+  threshold: number; setThreshold: (n: number) => void
 }) {
   return (
     <div className="space-y-6">
-      <div>
-        <Field label="Active strategy" hint="Determines how the AI interprets price action, structure, and confluence." />
-        <div className="grid grid-cols-2 gap-2 mt-2">
-          {SKILLSETS.map(s => (
-            <button
-              key={s}
-              onClick={() => setSkillset(s)}
-              className={`px-3 h-10 rounded-md border text-[12px] text-left transition
-                ${skillset === s
-                  ? "border-accent-blue/50 bg-accent-blue/10 text-white"
-                  : "border-white/[0.06] bg-white/[0.02] text-white/70 hover:text-white hover:bg-white/[0.04]"}`}
-            >
-              {s}
-            </button>
-          ))}
+      <div className="px-4 py-3.5 rounded-xl border border-accent-blue/20 bg-accent-blue/[0.05] space-y-2">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-accent-blue animate-pulse" />
+          <span className="text-[11px] font-bold text-accent-blue tracking-[0.14em]">AI AUTO-ANALYSIS ACTIVE</span>
         </div>
+        <p className="text-[11px] text-white/60 leading-relaxed">
+          The AI autonomously selects the best trading approach for each market — Smart Money Concepts, trend, breakout, or reversal — and only signals when a genuine A or A+ setup is present.
+        </p>
+        <p className="text-[10px] text-white/40 leading-relaxed">
+          No manual strategy selection required. The AI adapts to current market conditions automatically.
+        </p>
       </div>
 
       <div>
@@ -767,7 +760,6 @@ function ScheduleTab() {
 export default function SettingsModal({
   open, onClose,
   pairs, onTogglePair, onAddPair, onRemovePair,
-  skillset, setSkillset,
   threshold, setThreshold,
   aiSettings, notifSettings,
 }: Props) {
@@ -864,7 +856,7 @@ export default function SettingsModal({
           <div className="flex-1 overflow-y-auto p-4 md:p-5 min-h-0">
             {tab === "ai-models"  && <AIModelsTab aiSettings={aiSettings} />}
             {tab === "pairs"      && <PairsTab pairs={pairs} onTogglePair={onTogglePair} onAddPair={onAddPair} onRemovePair={onRemovePair} />}
-            {tab === "strategy"   && <StrategyTab skillset={skillset} setSkillset={setSkillset} threshold={threshold} setThreshold={setThreshold} />}
+            {tab === "strategy"   && <StrategyTab threshold={threshold} setThreshold={setThreshold} />}
             {tab === "notif"      && <NotificationsTab notifSettings={notifSettings} />}
             {tab === "apis"       && <APIsTab />}
             {tab === "schedule"   && <ScheduleTab />}

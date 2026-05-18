@@ -355,7 +355,7 @@ export default function TradeApp() {
         model: settings.selectedModels[settings.activeProvider],
         // apiKey intentionally omitted — fetched server-side from DB
         sym: p.sym, px: p.px, digits: p.digits, spread: p.spread,
-        history: p.history.slice(-50), skillset, timeframe,
+        history: p.history.slice(-50), skillset: "AI Auto", timeframe,
         rsi: ctx.rsi, macdLine: ctx.macdLine, signalLine: ctx.signalLine,
         histogram: ctx.histogram, bb: ctx.bb, trend: ctx.trend,
         support: ctx.swings.support, resistance: ctx.swings.resistance,
@@ -373,7 +373,7 @@ export default function TradeApp() {
       },
       ctx,
     }
-  }, [aiSettings, skillset, timeframe])
+  }, [aiSettings, timeframe])
 
   // ── Helper: issue a signal from AI TRADE response ─────────────
   const issueSignal = useCallback((p: Pair, data: { side: "BUY"|"SELL"; confidence: number; entry: number; sl: number; tp1: number; tp2: number; rr?: string; reasoning?: string }, ctx: ReturnType<typeof buildMarketContext>, tag: string) => {
@@ -381,7 +381,7 @@ export default function TradeApp() {
     const sig: NonNullable<Pair["signal"]> = {
       side: data.side, confidence: data.confidence,
       entry: data.entry, sl: data.sl, tp1: data.tp1, tp2: data.tp2,
-      rr: data.rr ?? "3.00", tf: timeframe, skillset,
+      rr: data.rr ?? "3.00", tf: timeframe, skillset: "AI Auto",
       why: tag ? `[${tag}] ${data.reasoning ?? ""}` : (data.reasoning ?? ""),
       time: now,
       expiresAt: now + (SIGNAL_EXPIRY_MS[timeframe] ?? SIGNAL_EXPIRY_MS.H1),
@@ -395,7 +395,7 @@ export default function TradeApp() {
     setUnread(u => u + 1)
     notifSettings.sendSignal({ ...sig, sym: p.sym, digits: p.digits })
     return sig
-  }, [timeframe, skillset, notifSettings])
+  }, [timeframe, notifSettings])
 
   // ── Strategic scan: ALL active pairs, no pre-filter, AI decides ─
   const runStrategicScan = useCallback(async () => {
@@ -497,7 +497,7 @@ export default function TradeApp() {
     logEvent("scan", `Strategic done — ${tradeCount} signals · ${watchCount} watching · avg ${avgLat}ms${cacheSuffix}`)
     setMetrics(prev => ({ ...prev, scanCount: prev.scanCount + 1, signalCount: prev.signalCount + tradeCount, lastAILatency: avgLat }))
     setScanning(false)
-  }, [pairs, aiSettings, skillset, threshold, timeframe, logEvent, calendarUpcoming, minutesUntil, buildAIBody, issueSignal, sessionGate])
+  }, [pairs, aiSettings, threshold, timeframe, logEvent, calendarUpcoming, minutesUntil, buildAIBody, issueSignal, sessionGate])
 
   // ── Tactical scan: ONLY pairs near their watch zones ──────────
   const runTacticalScan = useCallback(async () => {
@@ -541,7 +541,7 @@ export default function TradeApp() {
     }))
 
     setScanning(false)
-  }, [pairs, aiSettings, skillset, threshold, timeframe, logEvent, buildAIBody, issueSignal, sessionGate])
+  }, [pairs, aiSettings, threshold, timeframe, logEvent, buildAIBody, issueSignal, sessionGate])
 
   // Strategic fires every 30 min; tactical fires every 5 min (only if pairs waiting)
   useEffect(() => {
@@ -872,8 +872,6 @@ export default function TradeApp() {
               <div className="hidden md:flex shrink-0">
                 <AIPanel
                   pair={selected}
-                  skillset={skillset}
-                  setSkillset={handleSetSkillset}
                   history={history}
                   threshold={threshold}
                   setThreshold={handleSetThreshold}
@@ -914,8 +912,6 @@ export default function TradeApp() {
         <div className={`${mobilePanelView === "ai" ? "flex" : "hidden"} md:hidden flex-col w-full overflow-hidden`}>
           <AIPanel
             pair={selected}
-            skillset={skillset}
-            setSkillset={handleSetSkillset}
             history={history}
             threshold={threshold}
             setThreshold={handleSetThreshold}
@@ -1066,8 +1062,6 @@ export default function TradeApp() {
         onTogglePair={onToggleActive}
         onAddPair={handleAddCustomPair}
         onRemovePair={handleRemoveCustomPair}
-        skillset={skillset}
-        setSkillset={handleSetSkillset}
         threshold={threshold}
         setThreshold={handleSetThreshold}
         aiSettings={aiSettings}

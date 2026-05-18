@@ -1,7 +1,7 @@
 "use client"
 import { useState, useMemo, useEffect } from "react"
 import type { Pair, HistoryEntry, Signal, ConfluenceItem } from "@/app/lib/types"
-import { fmt, timeAgo, SKILLSETS } from "@/app/lib/market-data"
+import { fmt, timeAgo } from "@/app/lib/market-data"
 import { buildSMCContext } from "@/app/lib/smc"
 
 const SIZER_KEY = "tradeai_sizer_v1"
@@ -102,8 +102,6 @@ function PositionSizer({ pair }: { pair: Pair }) {
 
 interface Props {
   pair: Pair
-  skillset: string
-  setSkillset: (s: string) => void
   history: HistoryEntry[]
   threshold: number
   setThreshold: (n: number) => void
@@ -129,43 +127,6 @@ function KV({ label, v, color }: { label: string; v: string; color: string }) {
     <div className="flex items-center justify-between px-2 py-2 md:py-1.5 rounded-md bg-white/[0.025]">
       <span className="text-mute text-[10.5px] md:text-[10px] tracking-[0.14em]">{label}</span>
       <span className="num text-[11px]" style={{ color }}>{v}</span>
-    </div>
-  )
-}
-
-function SkillsetSelect({ value, onChange }: { value: string; onChange: (s: string) => void }) {
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full h-10 md:h-9 px-3 rounded-md glass flex items-center justify-between text-[12px]"
-      >
-        <span className="text-white">{value}</span>
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5"
-          className={`text-mute transition-transform ${open ? "rotate-180" : ""}`}>
-          <path d="m6 9 6 6 6-6"/>
-        </svg>
-      </button>
-      {open && (
-        <div className="absolute z-30 top-11 md:top-10 left-0 right-0 panel rounded-md p-1 shadow-2xl border border-white/[0.06]">
-          {SKILLSETS.map(s => (
-            <button
-              key={s}
-              onClick={() => { onChange(s); setOpen(false) }}
-              className={`w-full text-left px-2.5 h-10 md:h-8 rounded text-[12px] flex items-center justify-between hover:bg-white/[0.05] transition
-                ${s === value ? "text-accent-blue" : "text-white/85"}`}
-            >
-              <span>{s}</span>
-              {s === value && (
-                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="m5 12 5 5L20 7"/>
-                </svg>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   )
 }
@@ -256,7 +217,7 @@ function ConfluenceChecklist({ confluences }: { confluences: ConfluenceItem[] })
   )
 }
 
-export default function AIPanel({ pair, skillset, setSkillset, history, threshold, setThreshold, scanning, onScanPair, aiConfigured }: Props) {
+export default function AIPanel({ pair, history, threshold, setThreshold, scanning, onScanPair, aiConfigured }: Props) {
   const [manualScanning, setManualScanning] = useState(false)
   const trade = pair.status === "TRADE"
   const conf = pair.signal?.confidence ?? pair.confidence ?? 0
@@ -345,9 +306,17 @@ export default function AIPanel({ pair, skillset, setSkillset, history, threshol
       </div>
 
       <div className="overflow-y-auto flex-1">
-        {/* Skillset */}
-        <Section label="Analysis Mode">
-          <SkillsetSelect value={skillset} onChange={setSkillset} />
+        {/* AI Auto-Analysis */}
+        <Section label="AI Auto-Analysis">
+          <div className="px-3 py-2.5 rounded-lg bg-accent-blue/[0.06] border border-accent-blue/[0.12] space-y-1.5">
+            <div className="flex items-center gap-2">
+              <div className="w-1.5 h-1.5 rounded-full bg-accent-blue animate-pulse" />
+              <span className="text-[11px] font-semibold text-accent-blue tracking-[0.1em]">AUTONOMOUS MODE</span>
+            </div>
+            <p className="text-[10.5px] text-white/60 leading-relaxed">
+              The AI reads the full market structure and picks the best approach — SMC, trend, breakout, or reversal — for each scan. No manual strategy needed.
+            </p>
+          </div>
         </Section>
 
         {/* Live SMC Market Structure */}
