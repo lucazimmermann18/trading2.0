@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-
-export const runtime = "edge"
+import { dbGetAPIKey } from "@/app/lib/actions/apikeys"
 
 interface OHLCV { time: number; open: number; high: number; low: number; close: number }
 
@@ -79,7 +78,7 @@ interface UpcomingNews {
 interface AnalyzeRequest {
   provider: "anthropic" | "openai" | "deepseek" | "gemini"
   model: string
-  apiKey: string
+  apiKey: string  // always injected server-side; client value is discarded
   sym: string
   px: number
   digits: number
@@ -555,10 +554,17 @@ async function callGemini(r: AnalyzeRequest): Promise<AIResult> {
 
 export async function POST(request: NextRequest) {
   try {
-    const body: AnalyzeRequest = await request.json()
+    const raw = await request.json()
 
-    if (!body.apiKey) {
-      return NextResponse.json({ error: "No API key provided" }, { status: 400 })
+    // Fetch API key from DB — never trust the client-supplied value
+    const keyRecord = await dbGetAPIKey(raw.provider)
+    if (!keyRecord) {
+      return NextResponse.json({ error: "No API key configured for this provider" }, { status: 401 })
+    }
+    const body: AnalyzeRequest = {
+      ...raw,
+      apiKey: keyRecord.apiKey,
+      model: raw.model || keyRecord.model,
     }
 
     let result: AIResult

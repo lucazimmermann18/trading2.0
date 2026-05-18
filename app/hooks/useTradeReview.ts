@@ -3,11 +3,12 @@ import { useCallback } from "react"
 import type { Pair, TradeLesson } from "@/app/lib/types"
 import type { ResolvedSignal } from "./useSignalLifecycle"
 import { addLesson } from "@/app/lib/lessons-store"
+import { dbAddLesson } from "@/app/lib/actions/lessons"
 
 interface AISettings {
   activeProvider: "anthropic" | "openai" | "deepseek" | "gemini"
   selectedModels: Record<string, string>
-  apiKeys: Record<string, string>
+  keyStatus: Record<string, boolean>
   useAI: boolean
 }
 
@@ -19,11 +20,11 @@ interface Props {
 
 /**
  * Fire-and-forget AI review after a trade resolves.
- * Stores the lesson in localStorage for future scans.
+ * Stores the lesson in localStorage and Supabase for future scans.
  */
 export function useTradeReview({ pairs, aiSettings, onLesson }: Props) {
   const reviewTrade = useCallback(async (resolved: ResolvedSignal) => {
-    if (!aiSettings.useAI || !aiSettings.apiKeys[aiSettings.activeProvider]) return
+    if (!aiSettings.useAI || !aiSettings.keyStatus[aiSettings.activeProvider]) return
     // Only review terminal trades (not TP1 partial hits)
     if (resolved.newState !== "TP2" && resolved.newState !== "SL") return
 
@@ -38,7 +39,7 @@ export function useTradeReview({ pairs, aiSettings, onLesson }: Props) {
         body: JSON.stringify({
           provider: aiSettings.activeProvider,
           model: aiSettings.selectedModels[aiSettings.activeProvider],
-          apiKey: aiSettings.apiKeys[aiSettings.activeProvider],
+          // apiKey intentionally omitted — fetched server-side from DB
           sym: entry.sym,
           digits: entry.digits,
           side: entry.side,
@@ -75,6 +76,7 @@ export function useTradeReview({ pairs, aiSettings, onLesson }: Props) {
         nextTime: data.nextTime ?? "",
       }
       addLesson(lesson)
+      void dbAddLesson(lesson)
       onLesson?.(lesson)
     } catch {
       // Non-critical — review failure never blocks trading

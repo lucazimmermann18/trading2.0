@@ -74,25 +74,40 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 /* ── AI Models Tab ─────────────────────────────────────────── */
 function AIModelsTab({ aiSettings }: { aiSettings: AISettingsHook }) {
   const { settings, save, setApiKey, setSelectedModel } = aiSettings
-  const [showKey, setShowKey] = useState<Record<ProviderKey, boolean>>({
-    anthropic: false, openai: false, deepseek: false, gemini: false,
-  })
-  const [testState, setTestState] = useState<Record<ProviderKey, "idle" | "loading" | "ok" | "fail">>({
-    anthropic: "idle", openai: "idle", deepseek: "idle", gemini: "idle",
-  })
+
+  // Per-provider local state for key entry (key never stored in component state after save)
+  const [pendingKey, setPendingKey]   = useState<Record<ProviderKey, string>>({ anthropic: "", openai: "", deepseek: "", gemini: "" })
+  const [replaceMode, setReplaceMode] = useState<Record<ProviderKey, boolean>>({ anthropic: false, openai: false, deepseek: false, gemini: false })
+  const [saveState, setSaveState]     = useState<Record<ProviderKey, "idle" | "saving" | "ok" | "fail">>({ anthropic: "idle", openai: "idle", deepseek: "idle", gemini: "idle" })
+  const [testState, setTestState]     = useState<Record<ProviderKey, "idle" | "loading" | "ok" | "fail">>({ anthropic: "idle", openai: "idle", deepseek: "idle", gemini: "idle" })
+
+  const handleSaveKey = async (providerKey: ProviderKey) => {
+    const key = pendingKey[providerKey].trim()
+    if (!key) return
+    const model = settings.selectedModels[providerKey]
+    setSaveState(s => ({ ...s, [providerKey]: "saving" }))
+    const ok = await setApiKey(providerKey, key, model)
+    setSaveState(s => ({ ...s, [providerKey]: ok ? "ok" : "fail" }))
+    if (ok) {
+      setPendingKey(s => ({ ...s, [providerKey]: "" }))
+      setReplaceMode(s => ({ ...s, [providerKey]: false }))
+      setTimeout(() => setSaveState(s => ({ ...s, [providerKey]: "idle" })), 2500)
+    } else {
+      setTimeout(() => setSaveState(s => ({ ...s, [providerKey]: "idle" })), 4000)
+    }
+  }
 
   const testConnection = async (providerKey: ProviderKey) => {
-    const key = settings.apiKeys[providerKey]
-    if (!key) return
+    if (!settings.keyStatus[providerKey]) return
     setTestState(s => ({ ...s, [providerKey]: "loading" }))
     try {
-      const provider = PROVIDERS.find(p => p.key === providerKey)!
       const model = settings.selectedModels[providerKey]
       const res = await fetch("/api/ai/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          provider: providerKey, model, apiKey: key,
+          provider: providerKey, model,
+          // apiKey intentionally omitted — server fetches from DB
           sym: "EUR/USD", px: 1.089, digits: 5, rsi: 55, macd: 0.0001,
           spread: 0.6, skillset: "Trend Following",
           history: Array.from({ length: 5 }, (_, i) => ({
@@ -103,7 +118,6 @@ function AIModelsTab({ aiSettings }: { aiSettings: AISettingsHook }) {
         }),
       })
       setTestState(s => ({ ...s, [providerKey]: res.ok ? "ok" : "fail" }))
-      void provider
     } catch {
       setTestState(s => ({ ...s, [providerKey]: "fail" }))
     }
@@ -128,7 +142,7 @@ function AIModelsTab({ aiSettings }: { aiSettings: AISettingsHook }) {
         <Field label="Active AI Provider" hint="The provider used for all scan analysis" />
         <div className="grid grid-cols-4 gap-2 mt-2">
           {PROVIDERS.map(p => {
-            const hasKey = !!settings.apiKeys[p.key]
+            const hasKey = settings.keyStatus[p.key]
             const isActive = settings.activeProvider === p.key
             return (
               <button
@@ -161,16 +175,20 @@ function AIModelsTab({ aiSettings }: { aiSettings: AISettingsHook }) {
       {/* Per-provider configuration */}
       <div className="space-y-3">
         {PROVIDERS.map(provider => {
-          const key = settings.apiKeys[provider.key]
-          const model = settings.selectedModels[provider.key]
+          const hasKey  = settings.keyStatus[provider.key]
+          const model   = settings.selectedModels[provider.key]
           const isActive = settings.activeProvider === provider.key
-          const tState = testState[provider.key]
+          const tState  = testState[provider.key]
+          const sState  = saveState[provider.key]
+          const inReplace = replaceMode[provider.key]
+
           return (
             <div
               key={provider.key}
               className={`rounded-lg border p-3.5 transition
                 ${isActive ? "border-accent-blue/30 bg-accent-blue/[0.04]" : "border-white/[0.06] bg-white/[0.02]"}`}
             >
+              {/* Header row */}
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2.5">
                   <div
@@ -185,7 +203,7 @@ function AIModelsTab({ aiSettings }: { aiSettings: AISettingsHook }) {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {key ? (
+                  {hasKey ? (
                     <div className="flex items-center gap-1.5 text-[10px] text-accent-green font-medium">
                       <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
                       KEY SET
@@ -212,51 +230,78 @@ function AIModelsTab({ aiSettings }: { aiSettings: AISettingsHook }) {
               {/* API Key row */}
               <div className="mb-3">
                 <div className="text-[10px] tracking-[0.14em] uppercase text-mute mb-1.5">API Key</div>
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <input
-                      type={showKey[provider.key] ? "text" : "password"}
-                      value={key}
-                      onChange={e => setApiKey(provider.key, e.target.value)}
-                      placeholder={`Enter ${provider.name} API key…`}
-                      className="w-full h-8 px-3 pr-9 rounded-md bg-white/[0.03] border border-white/[0.06] text-[11.5px] text-white outline-none focus:border-accent-blue/40 placeholder:text-mute/40 transition font-mono"
-                    />
+
+                {hasKey && !inReplace ? (
+                  /* Key exists — show masked indicator + action buttons */
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-8 px-3 rounded-md bg-white/[0.02] border border-accent-green/20 flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-accent-green shrink-0" />
+                      <span className="text-[11px] font-mono text-accent-green/80 tracking-widest select-none">
+                        ●●●●●●●●●●●●
+                      </span>
+                      <span className="text-[9.5px] text-mute ml-auto">Gespeichert</span>
+                    </div>
                     <button
-                      onClick={() => setShowKey(s => ({ ...s, [provider.key]: !s[provider.key] }))}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-mute hover:text-white transition"
-                    >
-                      {showKey[provider.key] ? (
-                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
-                          <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
-                          <line x1="1" y1="1" x2="23" y2="23"/>
-                        </svg>
-                      ) : (
-                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                          <circle cx="12" cy="12" r="3"/>
-                        </svg>
-                      )}
-                    </button>
-                  </div>
-                  <button
-                    onClick={() => testConnection(provider.key)}
-                    disabled={!key || tState === "loading"}
-                    className={`h-8 px-3 rounded-md text-[11px] font-medium transition whitespace-nowrap
-                      ${!key ? "opacity-30 cursor-not-allowed border border-white/[0.06] text-mute"
-                        : tState === "ok"   ? "bg-accent-green/20 text-accent-green border border-accent-green/30"
-                        : tState === "fail" ? "bg-accent-red/20 text-accent-red border border-accent-red/30"
+                      onClick={() => testConnection(provider.key)}
+                      disabled={tState === "loading"}
+                      className={`h-8 px-2.5 rounded-md text-[11px] font-medium transition whitespace-nowrap
+                        ${tState === "ok"      ? "bg-accent-green/20 text-accent-green border border-accent-green/30"
+                        : tState === "fail"    ? "bg-accent-red/20 text-accent-red border border-accent-red/30"
                         : tState === "loading" ? "border border-white/10 text-mute cursor-wait"
                         : "border border-white/10 text-white hover:border-white/20"}`}
-                  >
-                    {tState === "loading" ? (
-                      <span className="flex items-center gap-1.5">
-                        <span className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />
-                        Testing
-                      </span>
-                    ) : tState === "ok" ? "✓ Connected" : tState === "fail" ? "✗ Failed" : "Test"}
-                  </button>
-                </div>
+                    >
+                      {tState === "loading" ? (
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />
+                          Test
+                        </span>
+                      ) : tState === "ok" ? "✓ OK" : tState === "fail" ? "✗ Fail" : "Test"}
+                    </button>
+                    <button
+                      onClick={() => setReplaceMode(s => ({ ...s, [provider.key]: true }))}
+                      className="h-8 px-2.5 rounded-md text-[11px] border border-white/10 text-mute hover:text-white hover:border-white/20 transition whitespace-nowrap"
+                    >
+                      Replace
+                    </button>
+                  </div>
+                ) : (
+                  /* No key yet, or in replace mode — show input + Save button */
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={pendingKey[provider.key]}
+                      onChange={e => setPendingKey(s => ({ ...s, [provider.key]: e.target.value }))}
+                      onKeyDown={e => { if (e.key === "Enter") void handleSaveKey(provider.key) }}
+                      placeholder={`${provider.name} API key…`}
+                      className="flex-1 h-8 px-3 rounded-md bg-white/[0.03] border border-white/[0.06] text-[11.5px] text-white outline-none focus:border-accent-blue/40 placeholder:text-mute/40 transition font-mono"
+                    />
+                    {inReplace && (
+                      <button
+                        onClick={() => { setReplaceMode(s => ({ ...s, [provider.key]: false })); setPendingKey(s => ({ ...s, [provider.key]: "" })) }}
+                        className="h-8 px-2.5 rounded-md text-[11px] border border-white/10 text-mute hover:text-white transition"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                    <button
+                      onClick={() => void handleSaveKey(provider.key)}
+                      disabled={!pendingKey[provider.key].trim() || sState === "saving"}
+                      className={`h-8 px-3 rounded-md text-[11px] font-medium transition whitespace-nowrap
+                        ${!pendingKey[provider.key].trim() ? "opacity-30 cursor-not-allowed border border-white/[0.06] text-mute"
+                          : sState === "ok"     ? "bg-accent-green/20 text-accent-green border border-accent-green/30"
+                          : sState === "fail"   ? "bg-accent-red/20 text-accent-red border border-accent-red/30"
+                          : sState === "saving" ? "border border-white/10 text-mute cursor-wait"
+                          : "bg-accent-blue/20 text-accent-blue border border-accent-blue/30 hover:bg-accent-blue/30"}`}
+                    >
+                      {sState === "saving" ? (
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />
+                          Saving
+                        </span>
+                      ) : sState === "ok" ? "✓ Saved" : sState === "fail" ? "✗ Failed" : "Save Key"}
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Model selector */}
@@ -292,7 +337,7 @@ function AIModelsTab({ aiSettings }: { aiSettings: AISettingsHook }) {
 
       <div className="rounded-lg border border-white/[0.05] bg-white/[0.015] p-3 text-[10.5px] text-mute leading-relaxed">
         <span className="text-white/60 font-medium">Security: </span>
-        API keys are stored only in your browser&apos;s localStorage and are never sent to any third-party server. All AI calls are proxied through this app&apos;s own API route.
+        API keys are stored encrypted in your private Supabase database and are never exposed to the browser. All AI calls are routed through this app&apos;s server-side API.
       </div>
     </div>
   )
