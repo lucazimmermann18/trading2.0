@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
-
-export const runtime = "edge"
+import { dbGetAPIKey } from "@/app/lib/actions/apikeys"
 
 interface OHLCV { time: number; open: number; high: number; low: number; close: number }
 
 interface ReviewRequest {
   provider: "anthropic" | "openai" | "deepseek" | "gemini"
   model: string
-  apiKey: string
+  apiKey: string  // always injected server-side; client value is discarded
   sym: string
   digits: number
   side: "BUY" | "SELL"
@@ -161,8 +160,14 @@ async function callProvider(r: ReviewRequest): Promise<ReviewResult> {
 
 export async function POST(request: NextRequest) {
   try {
-    const body: ReviewRequest = await request.json()
-    if (!body.apiKey) return NextResponse.json({ error: "No API key" }, { status: 400 })
+    const raw = await request.json()
+    const keyRecord = await dbGetAPIKey(raw.provider)
+    if (!keyRecord) return NextResponse.json({ error: "No API key configured" }, { status: 401 })
+    const body: ReviewRequest = {
+      ...raw,
+      apiKey: keyRecord.apiKey,
+      model: raw.model || keyRecord.model,
+    }
     const result = await callProvider(body)
     return NextResponse.json(result)
   } catch (err) {

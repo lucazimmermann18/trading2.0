@@ -38,6 +38,7 @@ import { useSignalLifecycle, type ResolvedSignal } from "@/app/hooks/useSignalLi
 import { useTradeManager } from "@/app/hooks/useTradeManager"
 import { useTradeReview } from "@/app/hooks/useTradeReview"
 import { loadHistory, saveHistory, patchHistoryEntry } from "@/app/lib/history-store"
+import { dbLoadHistory, dbSaveHistory, dbPatchHistoryEntry } from "@/app/lib/actions/history"
 import { useEconomicCalendar } from "@/app/hooks/useEconomicCalendar"
 import { getRecentLessons } from "@/app/lib/lessons-store"
 import { useSessionGate } from "@/app/hooks/useSessionGate"
@@ -77,6 +78,7 @@ export default function TradeApp() {
   const [toast, setToast] = useState<{ pair: Pair; signal: NonNullable<Pair["signal"]> } | null>(null)
   const [resolvedToast, setResolvedToast] = useState<ResolvedSignal | null>(null)
   const [view, setView] = useState<ViewId>("dashboard")
+  const [mobilePanelView, setMobilePanelView] = useState<"pairs" | "chart" | "ai">("chart")
   const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory())
   const [sessions, setSessions] = useState(activeSessions())
   const [unread, setUnread] = useState(0)
@@ -99,9 +101,24 @@ export default function TradeApp() {
     setAuditLog(prev => [{ id: auditIdRef.current++, time: Date.now(), kind, msg }, ...prev].slice(0, 120))
   }, [])
 
-  // Persist signal history to localStorage on every change
+  // Startup: sync history from DB (DB state wins for existing entries)
+  useEffect(() => {
+    dbLoadHistory().then(dbEntries => {
+      if (!dbEntries.length) return
+      setHistory(local => {
+        const byKey = new Map(local.map(e => [e.id ?? `${e.sym}-${e.time}`, e]))
+        for (const e of dbEntries) byKey.set(e.id ?? `${e.sym}-${e.time}`, e)
+        const merged = Array.from(byKey.values()).sort((a, b) => b.time - a.time).slice(0, 200)
+        saveHistory(merged)
+        return merged
+      })
+    }).catch(() => {})
+  }, [])
+
+  // Persist signal history to localStorage + write-through to DB on every change
   useEffect(() => {
     saveHistory(history)
+    if (history.length > 0) void dbSaveHistory(history.slice(0, 50))
   }, [history])
 
   // Live WebSocket prices
@@ -335,7 +352,7 @@ export default function TradeApp() {
       body: {
         provider: settings.activeProvider,
         model: settings.selectedModels[settings.activeProvider],
-        apiKey: settings.apiKeys[settings.activeProvider],
+        // apiKey intentionally omitted — fetched server-side from DB
         sym: p.sym, px: p.px, digits: p.digits, spread: p.spread,
         history: p.history.slice(-50), skillset, timeframe,
         rsi: ctx.rsi, macdLine: ctx.macdLine, signalLine: ctx.signalLine,
@@ -382,7 +399,7 @@ export default function TradeApp() {
   // ── Strategic scan: ALL active pairs, no pre-filter, AI decides ─
   const runStrategicScan = useCallback(async () => {
     const { settings } = aiSettings
-    if (!settings.useAI || !settings.apiKeys[settings.activeProvider]) {
+    if (!settings.useAI || !settings.keyStatus[settings.activeProvider]) {
       logEvent("config", "AI not configured — add an API key in Settings")
       return
     }
@@ -484,7 +501,7 @@ export default function TradeApp() {
   // ── Tactical scan: ONLY pairs near their watch zones ──────────
   const runTacticalScan = useCallback(async () => {
     const { settings } = aiSettings
-    if (!settings.useAI || !settings.apiKeys[settings.activeProvider]) return
+    if (!settings.useAI || !settings.keyStatus[settings.activeProvider]) return
     if (!sessionGate.allowed) return  // silently skip — strategic already logged the reason
     const tacticalPairs = pairs.filter(p => p.active && p.scanPhase === "tactical" && p.history.length >= 50)
     if (!tacticalPairs.length) return
@@ -556,7 +573,7 @@ export default function TradeApp() {
   // Single-pair analysis triggered by zone entry or manual trigger
   const runPairScan = useCallback(async (p: Pair, triggerLabel: string) => {
     const { settings } = aiSettings
-    if (!settings.useAI || !settings.apiKeys[settings.activeProvider]) {
+    if (!settings.useAI || !settings.keyStatus[settings.activeProvider]) {
       logEvent("config", `${p.sym} · AI not configured — add an API key in Settings`)
       return
     }
@@ -642,6 +659,7 @@ export default function TradeApp() {
       else if (newState === "EXPIRED") logEvent("scan", `${entry.sym} signal expired — setup no longer valid`)
       else logEvent("sl", `${entry.sym} stop loss hit · ${pnlStr}`)
       patchHistoryEntry(entry.sym, entry.time, { state: newState, pnl_r })
+      void dbPatchHistoryEntry(entry.sym, entry.time, { state: newState, pnl_r })
       notifSettings.sendLifecycleUpdate({
         sym: entry.sym, side: entry.side, state: newState,
         pnl_r, entry: entry.entry, digits: entry.digits,
@@ -818,47 +836,92 @@ export default function TradeApp() {
           currentSessions={sessionGate.currentSessions}
         />
 
-        {/* Main content area */}
-        {view === "dashboard" && (
-          <>
-            <ChartPanel pair={selected} timeframe={timeframe} setTimeframe={handleSetTimeframe} />
-            <AIPanel
-              pair={selected}
-              skillset={skillset}
-              setSkillset={handleSetSkillset}
-              history={history}
-              threshold={threshold}
-              setThreshold={handleSetThreshold}
-              scanning={scanning}
-              onScanPair={() => runPairScan(selected, "Manual")}
-              aiConfigured={aiSettings.settings.useAI && !!aiSettings.settings.apiKeys[aiSettings.settings.activeProvider]}
-            />
-          </>
-        )}
-
-        {view === "multichart"   && <MultiChartView pairs={pairs} onOpen={handleOpenPair} />}
-        {view === "heatmap"      && <HeatmapView pairs={pairs} />}
-        {view === "performance"  && <PerformanceView history={history} />}
-        {view === "journal"      && <JournalView history={history} onOpen={setSelectedSignal} onUpdateNote={(sym, time, notes) => {
-            patchHistoryEntry(sym, time, { notes })
-            setHistory(prev => prev.map(h => h.sym === sym && h.time === time ? { ...h, notes } : h))
-          }} />}
-        {view === "mtf"          && <MTFView pairs={pairs} selectedId={selectedId} onSelectPair={handleOpenPair} />}
-        {view === "intermarket"  && <IntermarketView />}
-        {view === "replay"       && <ReplayView history={history} pairs={pairs} />}
-        {view === "system" && (
-          <SystemView
-            auditLog={auditLog}
-            metrics={metrics}
-            wsConnected={wsConnected}
-            activePairs={pairs.filter(p => p.active).length}
-            totalPairs={pairs.length}
-            aiEnabled={aiSettings.settings.useAI}
-            aiProvider={aiSettings.settings.activeProvider}
-            barsLoaded={barsReadyCount}
+        {/* LeftSidebar — desktop always visible, mobile only on "pairs" tab */}
+        <div className={`${mobilePanelView === "pairs" ? "flex" : "hidden"} md:flex flex-col overflow-hidden shrink-0 md:shrink-0 w-full md:w-auto`}>
+          <LeftSidebar
+            pairs={pairs}
+            selectedId={selectedId}
+            onSelect={id => {
+              setSelectedId(id)
+              setView("dashboard")
+              setMobilePanelView("chart")
+            }}
+            onToggleActive={onToggleActive}
+            secondsLeft={secondsLeft}
+            strategicSecsLeft={strategicSecsLeft}
+            scanning={scanning}
+            scannerOn={scannerOn}
+            zones={zones}
+            warmupDone={warmupDone}
+            barsReady={barsReadyCount}
             totalActive={activePairsList.length}
+            sessionAllowed={sessionGate.allowed}
+            sessionReason={sessionGate.reason}
+            currentSessions={sessionGate.currentSessions}
           />
-        )}
+        </div>
+
+        {/* Chart / Views area — desktop always visible, mobile only on "chart" tab */}
+        <div className={`${mobilePanelView === "chart" ? "flex" : "hidden"} md:flex flex-1 min-w-0 overflow-hidden`}>
+          {view === "dashboard" && (
+            <>
+              <ChartPanel pair={selected} timeframe={timeframe} setTimeframe={handleSetTimeframe} />
+              {/* AIPanel inside chart area on desktop only */}
+              <div className="hidden md:flex shrink-0">
+                <AIPanel
+                  pair={selected}
+                  skillset={skillset}
+                  setSkillset={handleSetSkillset}
+                  history={history}
+                  threshold={threshold}
+                  setThreshold={handleSetThreshold}
+                  scanning={scanning}
+                  onScanPair={() => runPairScan(selected, "Manual")}
+                  aiConfigured={aiSettings.settings.useAI && !!aiSettings.settings.keyStatus[aiSettings.settings.activeProvider]}
+                />
+              </div>
+            </>
+          )}
+          {view === "multichart"   && <MultiChartView pairs={pairs} onOpen={handleOpenPair} />}
+          {view === "heatmap"      && <HeatmapView pairs={pairs} />}
+          {view === "performance"  && <PerformanceView history={history} />}
+          {view === "journal"      && <JournalView history={history} onOpen={setSelectedSignal} onUpdateNote={(sym, time, notes) => {
+              patchHistoryEntry(sym, time, { notes })
+              void dbPatchHistoryEntry(sym, time, { notes })
+              setHistory(prev => prev.map(h => h.sym === sym && h.time === time ? { ...h, notes } : h))
+            }} />}
+          {view === "mtf"          && <MTFView pairs={pairs} selectedId={selectedId} onSelectPair={handleOpenPair} />}
+          {view === "intermarket"  && <IntermarketView />}
+          {view === "replay"       && <ReplayView history={history} pairs={pairs} />}
+          {view === "system" && (
+            <SystemView
+              auditLog={auditLog}
+              metrics={metrics}
+              wsConnected={wsConnected}
+              activePairs={pairs.filter(p => p.active).length}
+              totalPairs={pairs.length}
+              aiEnabled={aiSettings.settings.useAI}
+              aiProvider={aiSettings.settings.activeProvider}
+              barsLoaded={barsReadyCount}
+              totalActive={activePairsList.length}
+            />
+          )}
+        </div>
+
+        {/* AIPanel — mobile only "ai" tab, desktop never (it lives inside chart area above) */}
+        <div className={`${mobilePanelView === "ai" ? "flex" : "hidden"} md:hidden flex-col w-full overflow-hidden`}>
+          <AIPanel
+            pair={selected}
+            skillset={skillset}
+            setSkillset={handleSetSkillset}
+            history={history}
+            threshold={threshold}
+            setThreshold={handleSetThreshold}
+            scanning={scanning}
+            onScanPair={() => runPairScan(selected, "Manual")}
+            aiConfigured={aiSettings.settings.useAI && !!aiSettings.settings.keyStatus[aiSettings.settings.activeProvider]}
+          />
+        </div>
       </div>
 
       <ResolutionToast

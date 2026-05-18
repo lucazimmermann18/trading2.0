@@ -81,14 +81,15 @@ export const BADGE_COLORS: Record<string, string> = {
 
 export interface AISettings {
   activeProvider: ProviderKey
-  apiKeys: Record<ProviderKey, string>
+  /** true = key is stored in the database (never exposed to client) */
+  keyStatus: Record<ProviderKey, boolean>
   selectedModels: Record<ProviderKey, string>
   useAI: boolean
 }
 
 export const DEFAULT_AI_SETTINGS: AISettings = {
   activeProvider: "anthropic",
-  apiKeys: { anthropic: "", openai: "", deepseek: "", gemini: "" },
+  keyStatus: { anthropic: false, openai: false, deepseek: false, gemini: false },
   selectedModels: {
     anthropic: "claude-sonnet-4-6",
     openai:    "gpt-4o",
