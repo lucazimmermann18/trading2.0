@@ -586,11 +586,13 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
         if (cancelled) return
         loadedBars = pair.history
       }
-      setBars(loadedBars)
+      // Guard: drop any bar with an invalid timestamp (e.g. NaN from a bad API response)
+      const validBars = loadedBars.filter(b => Number.isFinite(b.time) && b.time > 0)
+      setBars(validBars)
 
-      const cd = loadedBars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close }))
-      const ld = loadedBars.map(b => ({ time: b.time, value: b.close }))
-      const vd = loadedBars.map(b => ({
+      const cd = validBars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close }))
+      const ld = validBars.map(b => ({ time: b.time, value: b.close }))
+      const vd = validBars.map(b => ({
         time: b.time, value: b.volume ?? 0,
         color: b.close >= b.open ? "rgba(0,255,136,0.20)" : "rgba(255,61,90,0.20)",
       }))
@@ -598,12 +600,12 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
       lineRef.current?.setData(ld)
       volumeRef.current?.setData(vd)
 
-      const closes = loadedBars.map(b => b.close)
+      const closes = validBars.map(b => b.close)
 
       // Bollinger Bands
       const { upper, mid, lower } = calcBB(closes)
       const bbData = (vals: number[]) =>
-        loadedBars.map((b, i) => ({ time: b.time, value: vals[i] })).filter(d => !isNaN(d.value))
+        validBars.map((b, i) => ({ time: b.time, value: vals[i] })).filter(d => !isNaN(d.value))
       bbUpperRef.current?.setData(bbData(upper))
       bbMidRef.current?.setData(bbData(mid))
       bbLowerRef.current?.setData(bbData(lower))
@@ -611,8 +613,8 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
       // EMA 20 / 50
       const ema20vals = calcEMA(closes, 20)
       const ema50vals = calcEMA(closes, 50)
-      ema20Ref.current?.setData(loadedBars.map((b, i) => ({ time: b.time, value: ema20vals[i] })))
-      ema50Ref.current?.setData(loadedBars.map((b, i) => ({ time: b.time, value: ema50vals[i] })))
+      ema20Ref.current?.setData(validBars.map((b, i) => ({ time: b.time, value: ema20vals[i] })))
+      ema50Ref.current?.setData(validBars.map((b, i) => ({ time: b.time, value: ema50vals[i] })))
 
       chartRef.current?.timeScale().fitContent()
       setLoading(false)
@@ -627,8 +629,13 @@ export default function ChartPanel({ pair, timeframe, setTimeframe }: Props) {
   useEffect(() => {
     const last = pair.history[pair.history.length - 1]
     if (!last || loading || !candleRef.current) return
-    candleRef.current?.update({ time: last.time, open: last.open, high: last.high, low: last.low, close: last.close })
-    lineRef.current?.update({ time: last.time, value: last.close })
+    if (!Number.isFinite(last.time) || last.time <= 0) return
+    try {
+      candleRef.current?.update({ time: last.time, open: last.open, high: last.high, low: last.low, close: last.close })
+      lineRef.current?.update({ time: last.time, value: last.close })
+    } catch {
+      // Suppress stale-bar errors during chart re-initialisation across pair switches
+    }
     setBars(prev => {
       if (!prev.length) return prev
       const lastPrev = prev[prev.length - 1]

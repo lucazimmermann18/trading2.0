@@ -55,13 +55,14 @@ export async function GET(request: Request): Promise<Response> {
     if (!data.values?.length) return new Response("[]", { headers })
 
     const bars = data.values.reverse().map(v => ({
-      time:   Math.floor(new Date(v.datetime).getTime() / 1000),
+      // Force UTC parsing: TwelveData returns "YYYY-MM-DD HH:MM:SS" without timezone
+      time:   Math.floor(new Date(v.datetime.replace(" ", "T") + "Z").getTime() / 1000),
       open:   parseFloat(v.open),
       high:   parseFloat(v.high),
       low:    parseFloat(v.low),
       close:  parseFloat(v.close),
       volume: parseFloat(v.volume ?? "0"),
-    }))
+    })).filter(b => Number.isFinite(b.time) && b.time > 0)
 
     return new Response(JSON.stringify(bars), { headers })
   } catch {
