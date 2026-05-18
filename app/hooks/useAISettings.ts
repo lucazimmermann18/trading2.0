@@ -38,6 +38,17 @@ function loadLocal(): LocalState {
   }
 }
 
+const KEY_STATUS_CACHE = "tradeai_key_status_cache"
+
+function loadCachedKeyStatus(): Record<string, boolean> {
+  if (typeof window === "undefined") return {}
+  try { return JSON.parse(localStorage.getItem(KEY_STATUS_CACHE) ?? "{}") } catch { return {} }
+}
+
+function saveKeyStatusCache(status: Record<string, boolean>) {
+  try { localStorage.setItem(KEY_STATUS_CACHE, JSON.stringify(status)) } catch {}
+}
+
 function persistLocal(s: AISettings) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -55,21 +66,31 @@ export function useAISettings() {
   useEffect(() => {
     // Restore non-sensitive prefs from localStorage
     const local = loadLocal()
-    setSettings(prev => ({ ...prev, ...local }))
+    // Apply cached key status immediately (avoids flash of "not configured" on load)
+    const cachedStatus = loadCachedKeyStatus()
+    setSettings(prev => ({
+      ...prev,
+      ...local,
+      keyStatus: {
+        anthropic: cachedStatus.anthropic ?? false,
+        openai:    cachedStatus.openai    ?? false,
+        deepseek:  cachedStatus.deepseek  ?? false,
+        gemini:    cachedStatus.gemini    ?? false,
+      },
+    }))
 
-    // Fetch key presence flags from DB (never the actual keys)
+    // Verify against DB in the background (source of truth)
     fetch("/api/ai/key-status")
       .then(r => r.json())
       .then((status: Record<string, boolean>) => {
-        setSettings(prev => ({
-          ...prev,
-          keyStatus: {
-            anthropic: status.anthropic ?? false,
-            openai:    status.openai    ?? false,
-            deepseek:  status.deepseek  ?? false,
-            gemini:    status.gemini    ?? false,
-          },
-        }))
+        const next = {
+          anthropic: status.anthropic ?? false,
+          openai:    status.openai    ?? false,
+          deepseek:  status.deepseek  ?? false,
+          gemini:    status.gemini    ?? false,
+        }
+        saveKeyStatusCache(next)
+        setSettings(prev => ({ ...prev, keyStatus: next }))
       })
       .catch(() => {})
   }, [])
@@ -94,7 +115,11 @@ export function useAISettings() {
         body: JSON.stringify({ provider, apiKey: key.trim(), model }),
       })
       if (!res.ok) return false
-      setSettings(prev => ({ ...prev, keyStatus: { ...prev.keyStatus, [provider]: true } }))
+      setSettings(prev => {
+        const next = { ...prev.keyStatus, [provider]: true }
+        saveKeyStatusCache(next)
+        return { ...prev, keyStatus: next }
+      })
       return true
     } catch {
       return false

@@ -259,12 +259,14 @@ function buildPrompt(r: AnalyzeRequest): string {
   const spreadPct = ((r.spread / r.px) * 100).toFixed(3)
 
   const rsiLabel = r.rsi > 70 ? "OVERBOUGHT" : r.rsi > 60 ? "Elevated" : r.rsi < 30 ? "OVERSOLD" : r.rsi < 40 ? "Depressed" : "Neutral"
-  const macdDir  = r.macdLine > r.signalLine ? "BULLISH crossover" : "BEARISH crossover"
-  const bbWidth  = r.bb.upper - r.bb.lower
-  const bbPos    = bbWidth > 0 ? Math.round((r.px - r.bb.lower) / bbWidth * 100) : 50
+  const macdDir  = (r.macdLine ?? 0) > (r.signalLine ?? 0) ? "BULLISH crossover" : "BEARISH crossover"
+  const bb       = r.bb ?? { upper: r.px * 1.002, mid: r.px, lower: r.px * 0.998 }
+  const bbWidth  = bb.upper - bb.lower
+  const bbPos    = bbWidth > 0 ? Math.round((r.px - bb.lower) / bbWidth * 100) : 50
   const bbLabel  = bbPos < 20 ? "Near LOWER band" : bbPos > 80 ? "Near UPPER band" : "Mid-range"
 
-  const htfRsiLabel = r.htf.rsi > 65 ? "overbought" : r.htf.rsi < 35 ? "oversold" : "neutral"
+  const htf      = r.htf ?? { trend: "NEUTRAL", rsi: 50, support: [], resistance: [], lastClose: r.px, lastBarBullish: true }
+  const htfRsiLabel = htf.rsi > 65 ? "overbought" : htf.rsi < 35 ? "oversold" : "neutral"
   const atrSL    = (r.atr * 1.5).toFixed(d)
 
   const patterns = r.candlePatterns.filter(cp => cp.type !== "neutral")
@@ -276,7 +278,11 @@ function buildPrompt(r: AnalyzeRequest): string {
     `${new Date(b.time * 1000).toISOString().slice(11, 16)} O:${b.open.toFixed(d)} H:${b.high.toFixed(d)} L:${b.low.toFixed(d)} C:${b.close.toFixed(d)}`
   ).join("\n")
 
-  const smc = r.smc
+  const smc = r.smc ?? {
+    structure: { bias: "RANGING" as const, zone: "EQUILIBRIUM" as const, inOTE: false, lastBOS: null, recentSwingHigh: r.px * 1.01, recentSwingLow: r.px * 0.99 },
+    orderBlocks: [], h4OrderBlocks: [], fvgs: [], liquidity: [], sweeps: [], divergence: null,
+    daily: { pdHigh: r.px * 1.005, pdLow: r.px * 0.995, weekHigh: r.px * 1.01, weekLow: r.px * 0.99, d1Bias: "NEUTRAL", d1OBs: [] },
+  }
   const struct = smc.structure
   const swingRange = struct.recentSwingHigh - struct.recentSwingLow
   const pos = swingRange > 0 ? Math.round(((r.px - struct.recentSwingLow) / swingRange) * 100) : 50
@@ -400,9 +406,9 @@ ${sweepLines}
 ${divLine}
 
 === H4 STRUCTURE ===
-Trend: ${r.htf.trend} | RSI: ${r.htf.rsi.toFixed(1)} (${htfRsiLabel})
-Resistance: ${r.htf.resistance.length > 0 ? r.htf.resistance.map(l => l.toFixed(d)).join(" | ") : "None"}
-Support:    ${r.htf.support.length > 0 ? r.htf.support.map(l => l.toFixed(d)).join(" | ") : "None"}
+Trend: ${htf.trend} | RSI: ${htf.rsi.toFixed(1)} (${htfRsiLabel})
+Resistance: ${htf.resistance.length > 0 ? htf.resistance.map(l => l.toFixed(d)).join(" | ") : "None"}
+Support:    ${htf.support.length > 0 ? htf.support.map(l => l.toFixed(d)).join(" | ") : "None"}
 H4 Order Blocks:
 ${h4ObLines}
 

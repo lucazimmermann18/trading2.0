@@ -107,13 +107,24 @@ function AIModelsTab({ aiSettings }: { aiSettings: AISettingsHook }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           provider: providerKey, model,
-          // apiKey intentionally omitted — server fetches from DB
-          sym: "EUR/USD", px: 1.089, digits: 5, rsi: 55, macd: 0.0001,
-          spread: 0.6, skillset: "Trend Following",
-          history: Array.from({ length: 5 }, (_, i) => ({
-            time: Math.floor(Date.now() / 1000) - (4 - i) * 60,
-            open: 1.0888 + i * 0.0001, high: 1.0892 + i * 0.0001,
-            low: 1.0885 + i * 0.0001, close: 1.0890 + i * 0.0001,
+          phase: "strategic",
+          sym: "EUR/USD", px: 1.0890, digits: 5, spread: 0.6,
+          skillset: "Smart Money Concepts", timeframe: "H1",
+          rsi: 52, macdLine: 0.0002, signalLine: 0.0001, histogram: 0.0001,
+          bb: { upper: 1.0920, mid: 1.0890, lower: 1.0860 },
+          trend: "UP", support: [1.0860], resistance: [1.0920],
+          activeSessions: ["London"], atr: 0.0015,
+          candlePatterns: [],
+          htf: { trend: "UP", rsi: 55, support: [1.0840], resistance: [1.0950], lastClose: 1.0880, lastBarBullish: true },
+          smc: {
+            structure: { bias: "BULLISH", zone: "DISCOUNT", inOTE: false, lastBOS: null, recentSwingHigh: 1.0930, recentSwingLow: 1.0850 },
+            orderBlocks: [], h4OrderBlocks: [], fvgs: [], liquidity: [], sweeps: [], divergence: null,
+            daily: { pdHigh: 1.0920, pdLow: 1.0850, weekHigh: 1.0950, weekLow: 1.0820, d1Bias: "BULLISH", d1OBs: [] },
+          },
+          history: Array.from({ length: 20 }, (_, i) => ({
+            time: Math.floor(Date.now() / 1000) - (19 - i) * 3600,
+            open: 1.0880 + (i % 3) * 0.0002, high: 1.0895 + (i % 3) * 0.0002,
+            low: 1.0870 + (i % 3) * 0.0002,  close: 1.0888 + (i % 3) * 0.0002,
           })),
         }),
       })
